@@ -74,18 +74,22 @@ def pool_tools(ui):
                     )
 
     elif choice == 2:
-        curses.def_prog_mode()
-        curses.endwin()
-        try:
-            print(
-                "\nYeet OS storage shell\nUse lsblk, zpool and zfs to prepare storage. Type exit to rescan and return.\n",
-                flush=True,
-            )
-            subprocess.run(["bash", "-i"], env=dict(os.environ, YEET_INSTALL_SHELL="1"))
-        finally:
-            curses.reset_prog_mode()
-            ui.s.clear()
-            ui.s.refresh()
+        open_shell(
+            ui,
+            "Use lsblk, zpool and zfs to prepare storage. Type exit to rescan and return.",
+        )
+
+
+def open_shell(ui, message):
+    curses.def_prog_mode()
+    curses.endwin()
+    try:
+        print("\n" + message + "\n", flush=True)
+        subprocess.run(["bash", "-i"], env=dict(os.environ, YEET_INSTALL_SHELL="1"))
+    finally:
+        curses.reset_prog_mode()
+        ui.s.clear()
+        ui.s.refresh()
 
 
 def choose_dataset(ui, label, suggested):

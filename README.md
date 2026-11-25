@@ -16,7 +16,7 @@ curl -fL --retry 3 -o yeet-os-installer.iso https://github.com/yeetrun/yeet-os/r
 
 1. Write the ISO to a USB stick or attach it to a VM. Boot it with Ethernet connected. You’ll need a disk of at least 10 GiB that you can erase.
 2. Look at the machine’s screen or VM console. It shows an SSH command, a host-key fingerprint, and a password for this boot. Run that command from a laptop on the same network, check the fingerprint when SSH asks, and enter the password. The installer opens in your terminal.
-3. Choose **Install a fresh host**, pick your OS and data disks, and enter the name and SSH public key you want to use after reboot. The wizard walks you through Tailscale sign-in. Review your choices, install, then eject the ISO and reboot.
+3. Choose **Install a fresh host**, pick your OS and data disks, and enter the name and SSH public key you want to use after reboot. The wizard walks you through Tailscale sign-in. Review your choices and install. Reboot when prompted and boot from the installed disk.
 
 The ISO uses DHCP. Press **N** on the boot screen if you need to set up networking first, or **Enter** to install at the console. You can choose DHCP or a static address for the installed host.
 

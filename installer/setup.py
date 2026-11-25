@@ -379,7 +379,7 @@ class Console:
             return
         while True:
             try:
-                from storage_ui import fresh_layout, recover
+                from storage_ui import fresh_layout, open_shell, recover
 
                 machine = machine_profile(self)
                 choice = self.choose(
@@ -393,7 +393,10 @@ class Console:
                     ],
                 )
                 if choice == 2:
-                    return
+                    open_shell(
+                        self, "Yeet OS rescue shell. Type exit to return to setup."
+                    )
+                    continue
                 recovery = recover(self) if choice == 1 else None
                 if choice == 1 and recovery is None:
                     continue

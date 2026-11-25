@@ -55,7 +55,7 @@ Select **Install a fresh host**, then identify the OS disk by size, model and se
 
 Under **Manage ZFS pools or open shell**, import an offline pool by name and ID. To create a pool, open the ZFS shell, check disk serials with `lsblk`, then use `zpool` and `zfs` to build the desired topology. If your shell commands mounted filesystems, export the new pool before leaving the shell. Type `exit` to return, then import it through the wizard so the live system leaves its filesystems unmounted. You can keep unrelated datasets in the same pool. The host mounts the selected storage and its service children.
 
-Review the exact OS disk and the action for each storage location. Type the OS disk path to confirm. Setup prepares the selected NixOS generation before partitioning. When installation completes, eject the media and boot the disk. On a fresh install with prepared media, your Yeet host keeps the Tailscale identity you used to reach the installer. [Storage choices](screenshots/installer-payload-storage.png)
+Review the exact OS disk and the action for each storage location. Type the OS disk path to confirm. Setup prepares the selected NixOS generation before partitioning. When installation completes, reboot from the final screen. Select the installed disk at boot or detach the installer once the machine restarts. On a fresh install with prepared media, your Yeet host keeps the Tailscale identity you used to reach the installer. [Storage choices](screenshots/installer-payload-storage.png)
 
 ## Find the installed host on the LAN
 
