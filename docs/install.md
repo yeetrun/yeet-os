@@ -92,7 +92,7 @@ yeet run web nginx:alpine -p 8080:80
 yeet ssh -- curl -fsS http://127.0.0.1:8080/
 ```
 
-If the network goes down after the disk installation finishes, boot the installed disk, sign in locally and run `yeet-setup` to finish enrollment. Run `yeet-setup` from the installed host's root console to revisit workstation setup. The installed NixOS flake lives in `/etc/nixos`. Use `nixos-rebuild switch --flake /etc/nixos#yeet-os` for host configuration changes. Payload deploys use the ordinary Yeet CLI. Deployments requesting a separate Tailscale identity for a service also need a service provisioning credential as described in the [host instructions](../README.md).
+If the network goes down after the disk installation finishes, boot the installed disk, sign in locally and run `yeet-setup` to finish enrollment. Run `yeet-setup` from the installed host's root console to revisit workstation setup. The installed NixOS flake lives in `/etc/nixos`. Use `nixos-rebuild switch --flake /etc/nixos#yeet-os` for host configuration changes. Payload deploys use the ordinary Yeet CLI. Deployments requesting a separate Tailscale identity for a service also need a service provisioning credential as described in the [host instructions](host.md#connect-the-host-to-tailscale-and-deploy-an-app).
 
 ## Generic installer and unattended install
 
