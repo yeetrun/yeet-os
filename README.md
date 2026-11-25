@@ -4,27 +4,27 @@ Yeet OS is a NixOS installer for machines you want to run apps on. If you alread
 
 Either way, you deploy from your laptop with the same `yeet run` command. On Yeet OS, Nix manages the machine and Yeet runs your apps. Shipping a new version of a script or container doesn’t require a Nix rebuild.
 
-[![Installation walkthrough showing how to open the installer over SSH, choose disks, and deploy an app](docs/yeet-os-walkthrough.gif)](https://cdn.jsdelivr.net/gh/yeetrun/yeet-os@main/docs/yeet-os-walkthrough.mp4)
-
-[Play the walkthrough with sound (1 min 42 sec)](https://cdn.jsdelivr.net/gh/yeetrun/yeet-os@main/docs/yeet-os-walkthrough.mp4)
-
 ## Install Yeet OS
 
-You’ll need an x86-64 machine or VM with a disk you can erase. On your workstation, open the installer builder with Nix. A Mac can run the wizard if Nix has access to an x86-64 Linux builder.
+[Download the installer ISO for x86-64](https://github.com/yeetrun/yeet-os/releases/latest/download/yeet-os-installer.iso) · [SHA-256 checksum](https://github.com/yeetrun/yeet-os/releases/latest/download/SHA256SUMS)
+
+To download the latest ISO from a terminal:
 
 ```sh
-nix --extra-experimental-features 'nix-command flakes' run github:yeetrun/yeet-os#prepare
+curl -fL --retry 3 -o yeet-os-installer.iso https://github.com/yeetrun/yeet-os/releases/latest/download/yeet-os-installer.iso
 ```
 
-Choose a hostname, your SSH public key, and DHCP or static networking. The wizard asks for a single-use Tailscale auth key and builds a private ISO. Boot the target machine from that ISO.
+1. Write the ISO to a USB stick or attach it to a VM. Boot it with Ethernet connected. You’ll need a disk of at least 10 GiB that you can erase.
+2. Look at the machine’s screen or VM console. It shows an SSH command, a host-key fingerprint, and a password for this boot. Run that command from a laptop on the same network, check the fingerprint when SSH asks, and enter the password. The installer opens in your terminal.
+3. Choose **Install a fresh host**, pick your OS and data disks, and enter the name and SSH public key you want to use after reboot. The wizard walks you through Tailscale sign-in. Review your choices and install. Reboot when prompted and boot from the installed disk.
 
-To open the disk menu, SSH to the hostname you chose. For example, if you named the machine `yeet-home`, run this from your workstation:
+The ISO uses DHCP. Press **N** on the boot screen if you need to set up networking first, or **Enter** to install at the console. You can choose DHCP or a static address for the installed host.
 
-```sh
-ssh -t root@yeet-home
-```
+If you’d like an installer that’s already on your tailnet when it boots, you can also [prepare a private ISO with Nix](docs/install.md#prepare-a-private-installer). The walkthrough shows that option and the disk wizard both installers use.
 
-The same menu opens on the machine’s console. Choose **Install a fresh host**, pick the disk for NixOS, and decide where your apps will live. Review the disk choices before you confirm. [Installation guide and Tailscale key setup](docs/install.md)
+[![Walkthrough of the private installer, disk setup, and first deployment](docs/yeet-os-walkthrough.gif)](https://cdn.jsdelivr.net/gh/yeetrun/yeet-os@main/docs/yeet-os-walkthrough.mp4)
+
+[Play the narrated walkthrough (1 min 42 sec)](https://cdn.jsdelivr.net/gh/yeetrun/yeet-os@main/docs/yeet-os-walkthrough.mp4)
 
 ## Deploy your first app
 

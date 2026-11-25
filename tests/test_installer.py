@@ -10,6 +10,38 @@ import provision
 
 
 class InstallerTests(unittest.TestCase):
+    def test_live_console_prefers_ipv4_and_handles_filtered_addresses(self):
+        from setup import installer_addresses
+
+        self.assertEqual(
+            installer_addresses(
+                [
+                    {"addr_info": [{}]},
+                    {
+                        "addr_info": [
+                            {
+                                "family": "inet6",
+                                "scope": "global",
+                                "local": "2001:db8::1",
+                            },
+                            {"family": "inet", "scope": "global", "local": "192.0.2.1"},
+                            {},
+                        ]
+                    },
+                    {
+                        "addr_info": [
+                            {
+                                "family": "inet6",
+                                "scope": "global",
+                                "local": "2001:db8::2",
+                            }
+                        ]
+                    },
+                ]
+            ),
+            ["192.0.2.1", "2001:db8::2"],
+        )
+
     def test_mdns_selects_physical_uplinks_and_matches_static_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -215,6 +247,46 @@ class StorageAndProfileTests(unittest.TestCase):
                     "services": {"path": "/srv/yeet/custom"},
                     "hostId": "cafeface",
                 }
+            )
+
+    def test_generic_static_install_saves_network_and_preserves_recovered_host_id(self):
+        network = dict(
+            mode="static",
+            interface="ens18",
+            address="192.0.2.8/24",
+            gateway="192.0.2.1",
+            dns=["192.0.2.1"],
+        )
+        config = dict(
+            hostname="apps",
+            password="console-only",
+            network=network,
+            layout={"hostId": "abcdef12"},
+            recover_dataset="pool/apps",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source"
+            source.mkdir()
+            site = Path(tmp) / "site"
+            with (
+                patch.dict(
+                    provision.os.environ,
+                    YEET_OS_SOURCE=str(source),
+                    YEET_NIXPKGS_SOURCE=tmp,
+                ),
+                patch.object(provision, "run"),
+                patch.object(provision, "machine_profile", return_value=None),
+                patch.object(provision, "discovery_interfaces", return_value=["ens18"]),
+            ):
+                provision.prepare_system(site, config, "uefi")
+            self.assertEqual(
+                json.loads((site / "machine.json").read_text()),
+                {
+                    "hostname": "apps",
+                    "network": network,
+                    "hostId": "abcdef12",
+                    "sshPublicKey": "",
+                },
             )
 
     def test_mutable_state_separate_from_immutable_profile(self):

@@ -2,6 +2,7 @@
 
 import contextlib
 import fcntl
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -160,6 +161,40 @@ def configure_access(root, config):
         run("chpasswd", "-R", str(root), "-e", stdin="root:" + digest + "\n")
 
 
+def validate_network(n):
+    if not set(n) <= {
+        "mode",
+        "mac",
+        "interface",
+        "address",
+        "gateway",
+        "dns",
+    }:
+        raise ValueError("Unknown network setting in public profile.")
+    if n["mode"] == "dhcp":
+        return
+    if n["mode"] != "static":
+        raise ValueError("Choose DHCP or static IPv4.")
+    if (n.get("mac") or n.get("interface")) and not (
+        re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", n.get("mac", ""))
+        or (
+            not n.get("mac")
+            and re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", n.get("interface", ""))
+        )
+    ):
+        raise ValueError(
+            "Identify one network adapter by MAC address or interface name."
+        )
+    if "/" not in n["address"]:
+        raise ValueError("Include the prefix length in the static address.")
+    ipaddress.IPv4Interface(n["address"])
+    ipaddress.IPv4Address(n["gateway"])
+    if not n["dns"]:
+        raise ValueError("Enter at least one DNS server.")
+    for addr in n["dns"]:
+        ipaddress.ip_address(addr)
+
+
 def machine_profile(ui=None):
     path = Path("/etc/yeet-machine.json")
     if not path.exists():
@@ -222,6 +257,17 @@ def discovery_interfaces(network, sysnet=Path("/sys/class/net")):
 def prepare_system(site, config, firmware):
     machine = machine_profile()
     layout = config.get("layout")
+    if not machine and config.get("network"):
+        from storage import host_id
+
+        net = config["network"]
+        validate_network(net)
+        machine = dict(
+            hostname=config["hostname"],
+            network=net,
+            hostId=layout["hostId"] if layout else host_id(),
+            sshPublicKey=config.get("ssh_public_key", ""),
+        )
     if machine and config.get("recover_dataset"):
         machine = dict(machine, hostname=config["hostname"], hostId=layout["hostId"])
     site.mkdir(parents=True, exist_ok=True)

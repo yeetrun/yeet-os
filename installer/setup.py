@@ -15,11 +15,13 @@ from urllib.parse import urlparse
 from provision import (
     SetupError,
     disks,
+    discovery_interfaces,
     existing_host,
     install,
     locked,
     machine_profile,
     run,
+    validate_network,
 )
 
 CLIENT_GUIDE = "https://yeetrun.com/docs/getting-started/host-setup"
@@ -45,6 +47,41 @@ def qr_matrix(url):
         [cell in dark for cell in row[:width]]
         for row in lines[1 + colors : 1 + colors + height]
     ]
+
+
+def installer_addresses(interfaces):
+    addresses = []
+    for interface in interfaces:
+        # iproute2 can return empty objects for filtered addresses.
+        candidates = [
+            a
+            for a in interface.get("addr_info", [])
+            if a.get("scope") == "global"
+            and a.get("local")
+            and not a.get("tentative")
+            and not a.get("deprecated")
+        ]
+        if candidates:
+            best = min(
+                candidates,
+                key=lambda a: (a["family"] != "inet", bool(a.get("temporary"))),
+            )
+            addresses.append(best["local"])
+    return addresses
+
+
+def static_addresses(ui):
+    return {
+        "address": ui.field(
+            "NETWORK", "Host address and prefix", "For example, 192.168.1.42/24"
+        ),
+        "gateway": ui.field(
+            "NETWORK", "Default gateway", "Enter your router's IPv4 address."
+        ),
+        "dns": ui.field(
+            "NETWORK", "DNS servers", "Separate multiple addresses with spaces."
+        ).split(),
+    }
 
 
 class Console:
@@ -156,7 +193,7 @@ class Console:
                 raise Cancelled()
         return sorted(enabled)
 
-    def field(self, step, title, copy, initial="", secret=False):
+    def field(self, step, title, copy, initial="", secret=False, limit=255):
         value = initial
         try:
             curses.curs_set(1)
@@ -168,7 +205,8 @@ class Console:
                     f"Enter  Continue      Backspace  Delete      Esc  {self.escape_hint}",
                 )
                 text = "*" * len(value) if secret else value
-                self.put(y, 4, "› " + text, curses.color_pair(1) | curses.A_BOLD)
+                visible = text[-max(1, self.s.getmaxyx()[1] - 8) :]
+                self.put(y, 4, "› " + visible, curses.color_pair(1) | curses.A_BOLD)
                 self.s.move(y, min(self.s.getmaxyx()[1] - 2, 6 + len(text)))
                 key = self.s.get_wch()
                 if key in ("\n", "\r", curses.KEY_ENTER):
@@ -177,7 +215,7 @@ class Console:
                     raise Cancelled()
                 if key in (curses.KEY_BACKSPACE, "\x7f", "\b"):
                     value = value[:-1]
-                elif isinstance(key, str) and key.isprintable() and len(value) < 255:
+                elif isinstance(key, str) and key.isprintable() and len(value) < limit:
                     value += key
         finally:
             curses.curs_set(0)
@@ -294,6 +332,45 @@ class Console:
         if live and key in (10, 13, curses.KEY_ENTER):
             run("systemctl", "reboot")
 
+    def show_login(self):
+        password_file = Path("/run/yeet-installer-login/password")
+        host_key = Path("/etc/ssh/ssh_host_ed25519_key.pub")
+        self.s.timeout(1000)
+        try:
+            while True:
+                entries = json.loads(
+                    run("ip", "-j", "address", "show", "up", "scope", "global")
+                )
+                addresses = installer_addresses(entries)
+                commands = [f"ssh -p 2222 -t root@{addr}" for addr in addresses]
+                if password_file.is_file() and host_key.is_file() and commands:
+                    fingerprint = run("ssh-keygen", "-lf", str(host_key)).split()[1]
+                    lines = commands + [
+                        "Password: " + password_file.read_text().strip(),
+                        "SSH host key: " + fingerprint,
+                    ]
+                else:
+                    lines = [
+                        "Waiting for the SSH server and a network address.",
+                        "Connect Ethernet to a network with DHCP, or continue here.",
+                    ]
+                self.page(
+                    "LIVE INSTALLER",
+                    "Install from your laptop",
+                    "On the same network, open a terminal and run:\n"
+                    + "\n".join(lines),
+                    "Enter  Set up here     N  Configure live network",
+                )
+                key = self.s.getch()
+                if key in (ord("n"), ord("N")):
+                    curses.endwin()
+                    subprocess.run(["nmtui"])
+                    self.s.refresh()
+                if key in (10, 13, curses.KEY_ENTER):
+                    return
+        finally:
+            self.s.timeout(-1)
+
     def wizard(self):
         live = "YEET_UEFI_SYSTEM" in os.environ
         if not live:
@@ -302,7 +379,7 @@ class Console:
             return
         while True:
             try:
-                from storage_ui import fresh_layout, recover
+                from storage_ui import fresh_layout, open_shell, recover
 
                 machine = machine_profile(self)
                 choice = self.choose(
@@ -316,7 +393,10 @@ class Console:
                     ],
                 )
                 if choice == 2:
-                    return
+                    open_shell(
+                        self, "Yeet OS rescue shell. Type exit to return to setup."
+                    )
+                    continue
                 recovery = recover(self) if choice == 1 else None
                 if choice == 1 and recovery is None:
                     continue
@@ -339,13 +419,15 @@ class Console:
                 name = (
                     recovery[1]["hostname"]
                     if recovery
-                    else machine["hostname"]
-                    if machine
-                    else self.field(
-                        "IDENTITY",
-                        "Name your host",
-                        "Choose the name you will use from your workstation.",
-                        "yeet-home",
+                    else (
+                        machine["hostname"]
+                        if machine
+                        else self.field(
+                            "IDENTITY",
+                            "Name your host",
+                            "Choose the name you will use from your workstation.",
+                            "yeet-home",
+                        )
                     )
                 )
                 layout = (
@@ -354,7 +436,35 @@ class Console:
                     else fresh_layout(self, name, machine)
                 )
                 password = ""
+                public_key = machine["sshPublicKey"] if machine else ""
+                network = None
+                auth_key = ""
                 if not machine:
+                    if self.choose(
+                        "NETWORK",
+                        "Network after reboot",
+                        "The installer keeps its current address until you reboot.",
+                        ["Automatic (DHCP)", "Static IPv4"],
+                    ):
+                        nics = discovery_interfaces({})
+                        if not nics:
+                            raise SetupError("No Ethernet adapter was found.")
+                        nic = nics[
+                            self.choose(
+                                "NETWORK", "Choose the Ethernet adapter", "", nics
+                            )
+                        ]
+                        network = dict(
+                            mode="static", interface=nic, **static_addresses(self)
+                        )
+                        validate_network(network)
+                    public_key = self.field(
+                        "SSH ACCESS",
+                        "SSH into the installed host",
+                        "Paste your workstation’s SSH public key (the .pub file). "
+                        "Leave blank for console access only. The live SSH password expires on reboot.",
+                        limit=16384,
+                    ).strip()
                     password = self.field(
                         "LOCAL ACCESS",
                         "Set a console password",
@@ -370,10 +480,26 @@ class Console:
                         raise SetupError(
                             "The passwords must match and contain at least one character."
                         )
+                    if not recovery:
+                        auth_key = self.field(
+                            "TAILSCALE",
+                            "Connect your Yeet host",
+                            "Press Enter to sign in with a browser during installation, or paste "
+                            "a single-use, preauthorized, non-ephemeral auth key for tag:catch.",
+                            secret=True,
+                        ).strip()
+                        if auth_key and not auth_key.startswith("tskey-auth-"):
+                            raise SetupError(
+                                "Enter a Tailscale auth key or leave the field blank."
+                            )
                 summary = [
                     f"Erase {disk}   {dev['model'] or 'Disk'}   {dev['size'] / 1024**3:.1f} GiB",
                     f"Host   {name}",
                 ]
+                if network:
+                    summary.append(
+                        f"Network   {network['address']} on {network['interface']}"
+                    )
                 for label, loc in (
                     (
                         ("Yeet host data", layout["data"]),
@@ -388,9 +514,7 @@ class Console:
                     action = (
                         "Preserve"
                         if recovery
-                        else "Create"
-                        if loc.get("create")
-                        else "Use"
+                        else "Create" if loc.get("create") else "Use"
                     )
                     summary.append(
                         f"{label}   {action} {loc.get('dataset', loc['path'])}"
@@ -419,14 +543,23 @@ class Console:
                     serial=dev["serial"],
                     hostname=name,
                     password=password,
+                    network=network,
                     layout=layout,
-                    ssh_public_key=machine["sshPublicKey"] if machine else "",
+                    ssh_public_key=public_key,
                     source_offline=bool(recovery),
                     recover_dataset=recovery[0] if recovery else None,
                     legacy=recovery[1].get("legacy") if recovery else None,
                 )
-                with locked():
-                    result = install(plan, None, self.event)
+                with locked(), contextlib.ExitStack() as inputs:
+                    key_path = None
+                    if auth_key:
+                        key_file = inputs.enter_context(
+                            tempfile.NamedTemporaryFile(dir="/run", mode="w")
+                        )
+                        key_file.write(auth_key)
+                        key_file.flush()
+                        key_path = Path(key_file.name)
+                    result = install(plan, key_path, self.event)
                 self.clients(result, True)
                 return
             except Cancelled:
@@ -486,6 +619,7 @@ def main():
     )
     args.add_argument("--config", help="explicit unattended JSON plan")
     args.add_argument("--select-uplink", action="store_true", help=argparse.SUPPRESS)
+    args.add_argument("--show-login", action="store_true", help=argparse.SUPPRESS)
     options = args.parse_args()
     if os.geteuid() != 0:
         raise SetupError("Run yeet-setup as root.")
@@ -505,7 +639,18 @@ def main():
                 subprocess.run(["setfont", "-C", tty, "-d"], capture_output=True)
         if os.environ.get("TERM") in ("", "dumb", None) and os.isatty(0):
             os.environ["TERM"] = "xterm"
-        curses.wrapper(lambda screen: Console(screen).wizard())
+
+        def interactive(screen):
+            ui = Console(screen)
+            if (
+                options.show_login
+                and "YEET_UEFI_SYSTEM" in os.environ
+                and re.fullmatch(r"/dev/tty(?:S)?[0-9]+", tty)
+            ):
+                ui.show_login()
+            ui.wizard()
+
+        curses.wrapper(interactive)
 
 
 if __name__ == "__main__":

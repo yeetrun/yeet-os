@@ -3,7 +3,6 @@
 
 import argparse
 import curses
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -13,8 +12,8 @@ import subprocess
 import sys
 import tempfile
 
-from provision import SetupError, run
-from setup import Cancelled, Console
+from provision import SetupError, run, validate_network
+from setup import Cancelled, Console, static_addresses
 
 ROOT = Path(__file__).resolve().parents[1]
 KEY_DOCS = "https://tailscale.com/kb/1085/auth-keys"
@@ -25,15 +24,6 @@ def validate_machine(m):
         raise ValueError(
             "The public profile accepts only hostname, hostId, sshPublicKey and network."
         )
-    if not set(m["network"]) <= {
-        "mode",
-        "mac",
-        "interface",
-        "address",
-        "gateway",
-        "dns",
-    }:
-        raise ValueError("Unknown network setting in public profile.")
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", m["hostname"]):
         raise ValueError("Use a lowercase DNS hostname.")
     if not re.fullmatch("[0-9a-f]{8}", m["hostId"]) or int(m["hostId"], 16) == 0:
@@ -42,29 +32,7 @@ def validate_machine(m):
     if "\n" in pub or not pub.startswith(("ssh-", "ecdsa-", "sk-")):
         raise ValueError("Choose one OpenSSH public key.")
     run("ssh-keygen", "-lf", "/dev/stdin", stdin=pub + "\n")
-    n = m["network"]
-    if n["mode"] == "dhcp":
-        return
-    if n["mode"] != "static":
-        raise ValueError("Choose DHCP or static IPv4.")
-    if (n.get("mac") or n.get("interface")) and not (
-        re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", n.get("mac", ""))
-        or (
-            not n.get("mac")
-            and re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", n.get("interface", ""))
-        )
-    ):
-        raise ValueError(
-            "Identify one network adapter by MAC address or interface name."
-        )
-    if "/" not in n["address"]:
-        raise ValueError("Include the prefix length in the static address.")
-    ipaddress.IPv4Interface(n["address"])
-    ipaddress.IPv4Address(n["gateway"])
-    if not n["dns"]:
-        raise ValueError("Enter at least one DNS server.")
-    for addr in n["dns"]:
-        ipaddress.ip_address(addr)
+    validate_network(m["network"])
 
 
 def wizard(s):
@@ -104,15 +72,7 @@ def wizard(s):
         net = {
             "mode": "static",
             **({("mac" if ":" in nic else "interface"): nic} if nic else {}),
-            "address": ui.field(
-                "NETWORK", "Host address and prefix", "For example, 192.168.1.42/24"
-            ),
-            "gateway": ui.field(
-                "NETWORK", "Default gateway", "Enter your router's IPv4 address."
-            ),
-            "dns": ui.field(
-                "NETWORK", "DNS servers", "Separate multiple addresses with spaces."
-            ).split(),
+            **static_addresses(ui),
         }
     machine = dict(
         hostname=name, hostId=secrets.token_hex(4), sshPublicKey=pub, network=net

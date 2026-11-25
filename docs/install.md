@@ -1,15 +1,21 @@
 # Install Yeet OS
 
-Prepare the image at your workstation, then finish the installation over SSH or at the machine’s console. The installer boots x86-64 hardware with UEFI or legacy BIOS. You need a spare OS disk of at least 10 GiB. You can keep Yeet host data and app files on separate disks.
+[Download the x86-64 installer](https://github.com/yeetrun/yeet-os/releases/latest/download/yeet-os-installer.iso) and write it to USB or attach it as a virtual CD. It boots with UEFI or legacy BIOS. Have a spare OS disk of at least 10 GiB. Yeet host data and app files can live on separate disks. To verify the download, save the [checksum file](https://github.com/yeetrun/yeet-os/releases/latest/download/SHA256SUMS) beside it and run `shasum -a 256 -c SHA256SUMS`.
 
-[Watch the installation walkthrough](yeet-os-walkthrough.mp4) to see how to build the ISO with `nix run .#prepare`, boot it, and use `ssh -t root@<installer-name>` to open the disk wizard. The video follows a fresh install through deploying an app and reading its first saved file.
+## Connect to the installer
+
+Boot the machine on a wired network with DHCP. The physical or VM console shows a command such as `ssh -p 2222 -t root@192.168.1.42`, an SSH host-key fingerprint, and a random password. From a computer on the same network, run the command displayed on **your** screen. Check the fingerprint, then enter the displayed password. This opens the setup wizard. You can do the rest over SSH, including disk selection and Tailscale sign-in. Use a trusted installation network.
+
+Press **N** on the console to change live network settings if needed, or **Enter** to use the wizard locally. The SSH password and host key change whenever you reboot the ISO. If SSH remembers an earlier installer at that address, check the new fingerprint at the console before removing the old entry with `ssh-keygen -R '[192.168.1.42]:2222'`, substituting the actual address.
+
+Choose a hostname, DHCP or static IPv4 for the installed host, and paste your workstation’s SSH **public** key for access after reboot. Set a separate local console password. To join Tailscale, open the login URL or scan the QR code when prompted, or paste a single-use preauthorized, non-ephemeral auth key for `tag:catch` during setup. The installed system accepts SSH keys on port 22. [Tailscale permissions](../yeet-nix/website/docs/concepts/tailscale.mdx)
 
 ## Prepare a private installer
 
-From the Yeet OS checkout, run the following command. The workstation needs Nix with flakes and access to an x86-64 Linux builder. A Mac can run the wizard and use a configured remote Linux builder.
+Use this option for a machine you want to reach over Tailscale as soon as it boots. The workstation needs Nix with flakes and access to an x86-64 Linux builder. A Mac can run the wizard and use a configured remote Linux builder.
 
 ```sh
-nix --extra-experimental-features 'nix-command flakes' run .#prepare
+nix --extra-experimental-features 'nix-command flakes' run github:yeetrun/yeet-os#prepare
 ```
 
 1. Choose a hostname (the suggested name is `yeet-home`) and your workstation’s SSH **public** key. A fresh install uses that hostname for the live OS, the installed OS, and the name Yeet requests on Tailscale. When recovering a host, Yeet reuses its saved Tailscale identity.
@@ -49,28 +55,28 @@ Select **Install a fresh host**, then identify the OS disk by size, model and se
 
 Under **Manage ZFS pools or open shell**, import an offline pool by name and ID. To create a pool, open the ZFS shell, check disk serials with `lsblk`, then use `zpool` and `zfs` to build the desired topology. If your shell commands mounted filesystems, export the new pool before leaving the shell. Type `exit` to return, then import it through the wizard so the live system leaves its filesystems unmounted. You can keep unrelated datasets in the same pool. The host mounts the selected storage and its service children.
 
-Review the exact OS disk and the action for each storage location. Type the OS disk path to confirm. Setup prepares the selected NixOS generation before partitioning. When installation completes, eject the media and boot the disk. On a fresh install with prepared media, your Yeet host keeps the Tailscale identity you used to reach the installer. [Storage choices](screenshots/installer-payload-storage.png)
+Review the exact OS disk and the action for each storage location. Type the OS disk path to confirm. Setup prepares the selected NixOS generation before partitioning. When installation completes, reboot from the final screen. Select the installed disk at boot or detach the installer once the machine restarts. On a fresh install with prepared media, your Yeet host keeps the Tailscale identity you used to reach the installer. [Storage choices](screenshots/installer-payload-storage.png)
 
 ## Find the installed host on the LAN
 
-After booting from disk, a machine named `yeet-home` publishes `yeet-home.local` and the Bonjour SSH service `_ssh._tcp` through Avahi. From the same LAN, sign in with `ssh root@yeet-home.local`. On a Mac, `dns-sd -B _ssh._tcp local` browses available SSH services. During installation, remote SSH uses the tailnet name.
+After booting from disk, a machine named `yeet-home` publishes `yeet-home.local` and the Bonjour SSH service `_ssh._tcp` through Avahi. From the same LAN, sign in with `ssh root@yeet-home.local`. On a Mac, `dns-sd -B _ssh._tcp local` browses available SSH services. During installation, use the SSH command on the console for the public ISO, or the tailnet name for a private ISO.
 
 The installer records physical Ethernet-type interfaces in `/etc/nixos/host.json`. Static installations use the selected adapter. DHCP installations use the detected hardware adapters. If you replace or rename an adapter, update the list and rebuild. Discovery follows the Yeet LAN bridge when configured. Payload networks are excluded. Installed hosts also enable time synchronization, weekly SSD TRIM, the NixOS firewall and the QEMU guest agent.
 
 ## Recover an existing Yeet host
 
-Choose **Recover an existing host** at the welcome screen. Shut down the original host before bringing its identity online elsewhere. For remote recovery, prepare media with a distinct temporary hostname and a new enrollment key. [Recovery screen](screenshots/installer-recovery.png)
+Choose **Recover an existing host** at the welcome screen. Shut down the original host before bringing its identity online elsewhere. For remote recovery with a private ISO, use a distinct temporary hostname and a new enrollment key. [Recovery screen](screenshots/installer-recovery.png)
 
 - **Repair my Yeet OS boot disk** if its root filesystem and installed system generation are intact. Boot the installer in the same firmware mode, select the original disk and confirm the hostname. This reinstalls the bootloader. Eject the installer and start the original disk.
 - **Restore Yeet from my data disks** if you replaced the OS disk and still have your original ZFS data disks. Import the original pools, then select the dataset where Yeet stored its host data. The wizard uses saved settings when it finds them. Otherwise, it reads the app list from your disks and asks what should start at boot.
 
-After recovery, you can use the same Yeet address from your workstation. Remove the temporary installer node from your tailnet when finished. To prepare for a future disk swap, keep both Yeet host data and app files on storage that will survive it. Apps that use external drives or remote volumes still need access to those files.
+After recovery, you can use the same Yeet address from your workstation. If you used a private ISO, remove its temporary installer node from your tailnet when finished. To prepare for a future disk swap, keep both Yeet host data and app files on storage that will survive it. Apps that use external drives or remote volumes still need access to those files.
 
 ### Move an existing Yeet host to a new SSD
 
 [Watch the recovery walkthrough](legacy-migration.mp4) to see **Restore Yeet from my data disks** in the Proxmox console. It shows how to import the original pool, recognize the replacement SSD and verify the same app file after reboot. It also shows the app list Yeet displays when a disk has no saved OS settings.
 
-Prepare the ISO on your workstation. Use a temporary installer hostname for SSH access. You can build it before you know the destination disks or pool names.
+Boot the public ISO and use the LAN login on its console. If you use a private installer instead, give it a temporary hostname for SSH access.
 
 1. Shut down the previous host. Replace its boot SSD, leave the data disks attached, and boot the ISO. Connect over SSH or use the physical console.
 2. Choose **Recover an existing host → Manage ZFS pools or open shell** and import each original pool. Then choose **Restore Yeet from my data disks**. Select the ZFS dataset where Yeet stored its host data. You can recognize it by `db.json` and `tsnet/tailscaled.state`.
@@ -94,11 +100,9 @@ yeet ssh -- curl -fsS http://127.0.0.1:8080/
 
 If the network goes down after the disk installation finishes, boot the installed disk, sign in locally and run `yeet-setup` to finish enrollment. Run `yeet-setup` from the installed host's root console to revisit workstation setup. The installed NixOS flake lives in `/etc/nixos`. Use `nixos-rebuild switch --flake /etc/nixos#yeet-os` for host configuration changes. Payload deploys use the ordinary Yeet CLI. Deployments requesting a separate Tailscale identity for a service also need a service provisioning credential as described in the [host instructions](host.md#connect-the-host-to-tailscale-and-deploy-an-app).
 
-## Generic installer and unattended install
+## Unattended install
 
-To enroll interactively at the physical console, build `nix build .#installer` and boot `result/iso/yeet-os-installer.iso`. The generic installer uses DHCP. At enrollment, scan the Tailscale QR code or press **K** to provide a key file. The QR code on the final screen opens the workstation guide.
-
-For a fully unattended install, use the generic ISO with a seed.
+The same public ISO accepts an unattended seed. The live SSH login is disabled when booting with a seed. To build the generic ISO yourself on x86-64 Linux, run `nix build .#installer` in this checkout.
 
 Prepare a second volume labeled `YEETSEED`. Put these two files at its root. Anyone with access to this volume can read the enclosed key until it is consumed or expires.
 
