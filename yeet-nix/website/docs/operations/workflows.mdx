@@ -1,0 +1,393 @@
+---
+title: Workflows
+description: Common deploy, update, recovery, and cleanup loops.
+---
+
+Start here when you know what you want to do and need the command shape. For
+payload-specific details, use the linked payload guide.
+
+For real homelab services, run these commands from a
+[Service Workspace](/docs/getting-started/service-workspace). Yeet first looks
+for `yeet.toml` in or above the current directory. If none is found, it uses
+the configured workspace that owns the target catch host.
+
+The pattern is deliberately repetitive: run the command, inspect status, read
+logs, then make the next change. Infrastructure gets easier when the feedback
+loop is short and visible.
+
+## Deploy with the web form
+
+Use the guided flow for a first deploy or when you do not want to remember the
+flags:
+
+```bash
+yeet run --web
+yeet run --web <svc>
+yeet run --web <svc> ./compose.yml
+```
+
+The form saves the same service config to `yeet.toml` that the CLI uses.
+Deploy progress appears in both the browser terminal and the local terminal.
+The browser keeps 1,000 lines of scrollback and reconnects to an in-progress
+deploy without restarting it. Runtime errors leave the form editable so you
+can correct the inputs and retry.
+
+## Deploy a compose stack
+
+```bash
+yeet run <svc> ./compose.yml
+yeet info <svc>
+yeet logs -f <svc>
+```
+
+After the first successful deploy, rerun the saved service from the workspace
+that contains `yeet.toml`:
+
+```bash
+yeet run <svc>
+```
+
+Use [Containers](/docs/payloads/containers) for Compose, Dockerfiles, images,
+Python, and TypeScript payloads.
+
+## Run a public image
+
+```bash
+yeet run -p 8080:80 <svc> nginx:alpine
+yeet status <svc>
+yeet status <svc-a> <svc-b>
+```
+
+Replace the full published-port list later with `service set`:
+
+```bash
+yeet service set <svc> -p 80:80 -p 443:443
+yeet service set <svc> --publish-reset -p 443:443
+```
+
+## Push a local image
+
+Use this when you already built a container image on your workstation. Yeet
+pushes it to the catch host's registry and can run it from there:
+
+```bash
+yeet docker push <svc> <local-image>:<tag> --run
+```
+
+## Build from a Dockerfile
+
+```bash
+yeet run <svc> ./Dockerfile
+yeet logs -f <svc>
+```
+
+## Deploy a binary or script
+
+Build binaries for the catch host architecture before deploying:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o ./bin/<svc> ./cmd/<svc>
+yeet run <svc> ./bin/<svc>
+```
+
+For scripts:
+
+```bash
+yeet run <svc> ./script.sh
+yeet run <svc> ./script.sh -- --app-flag value
+```
+
+Use [Binaries & Scripts](/docs/payloads/binaries) for environment and file
+setup.
+
+Fresh native binaries and scripts run in the Bubblewrap sandbox by default.
+Add a read-only file or directory and a writable directory at initial deploy:
+
+```bash
+yeet run api ./api --sandbox-ro=/etc/api --sandbox-rw=/srv/api-cache:/cache
+```
+
+Existing native services retain their reported `legacy`, `on`, or `off` state.
+Choose a state one service at a time:
+
+```bash
+yeet service set api --sandbox=on
+yeet service set api --sandbox=off
+```
+
+For existing services, each mentioned exposure class is a complete guarded
+list. Preserve every entry you want to keep, or use that class's `reset` token
+to replace it:
+
+```bash
+yeet service set api --sandbox-ro=/etc/api --sandbox-ro=/etc/ssl
+yeet service set api --sandbox-ro=reset --sandbox-ro=/etc/api
+```
+
+An exposure-only edit changes an `off` service to `on`. Repeat
+`--sandbox=off` when the new exposure should stay dormant:
+
+```bash
+yeet service set api --sandbox=off --sandbox-ro=/etc/api
+```
+
+Apply sandbox changes separately from identity, network, storage, schedule,
+publication, and snapshot changes. See
+[Native Sandboxing](/docs/concepts/native-sandboxing) for the filesystem view,
+namespace boundary, and Bubblewrap installation triggers.
+
+## Run a cron job
+
+```bash
+yeet run backup ./backup --cron="0 3 * * *" --run-as=backup --net=iso -- --full
+yeet logs -f <svc>
+```
+
+`run --cron` deploys or redeploys a scheduled native binary or script. Change
+only an installed scheduled native service's timing without a payload:
+
+```bash
+yeet service set backup --cron="30 2 * * *"
+```
+
+`service set --cron` never converts an ordinary, container, or VM service into
+a scheduled service. It cannot clear a schedule or combine with another service
+mutation, and preserves the server-side payload and other settings. Yeet updates
+a matching `yeet.toml` after Catch succeeds; run `yeet service sync <svc>` when
+the local config is absent or cannot be saved. Use
+[Cron Jobs](/docs/payloads/cron-jobs) for timer behavior and update flow.
+
+## Create a VM
+
+```bash
+yeet run <vm> vm://ubuntu/26.04
+yeet ssh <vm>
+```
+
+VM payloads require a KVM-capable Linux catch host. Use NixOS when you want
+that image family:
+
+```bash
+yeet run <vm> vm://nixos/26.05
+```
+
+Use [VMs](/docs/payloads/vms) for host requirements, image cache commands,
+networking, file copy, and recovery.
+
+## Upgrade a VM host runtime
+
+Treat guest updates and the host Firecracker runtime as separate operations.
+First inspect the exact live and selected pairs:
+
+```bash
+yeet vm runtime status <vm> --format=json-pretty
+```
+
+Refresh the host cache, stage the promoted stable pair, and inspect again:
+
+```bash
+yeet vm runtime update
+yeet vm runtime upgrade <vm>
+yeet vm runtime status <vm>
+```
+
+Nothing above restarts the VM. When downtime is acceptable, start the runtime
+trial:
+
+```bash
+yeet vm runtime upgrade <vm> --restart
+```
+
+For ZFS-backed VMs, that explicit restart creates a protected pre-upgrade disk
+recovery point. Raw-disk VMs print a warning and retain launcher rollback only.
+If the candidate does not become ready, Yeet starts the configured pair again.
+
+To back out a healthy transition:
+
+```bash
+yeet vm runtime rollback <vm> --restart
+```
+
+A package upgrade inside the guest cannot request a host runtime update. A
+natural guest reboot can consume an already staged candidate, so check `staged`
+before rebooting when timing matters. Use the candidate channel only for a
+deliberate canary:
+
+```bash
+yeet vm runtime upgrade <vm> --channel=candidate --restart
+```
+
+See [VMs](/docs/payloads/vms#manage-the-host-firecracker-runtime) for policy,
+support states, custom imports, and pruning.
+
+## Update a service
+
+For binaries, scripts, Dockerfiles, and Compose files, update the local payload
+and rerun:
+
+```bash
+yeet run <svc> ./compose.yml
+yeet run <svc> ./bin/<svc>
+```
+
+For Compose image refreshes:
+
+```bash
+yeet run --pull <svc> ./compose.yml
+yeet docker outdated
+yeet docker update <svc>
+yeet docker update --outdated
+```
+
+Use `--force` when you want to redeploy even if yeet detects no payload or
+config change. It reruns the deploy; it does not diagnose why the previous
+state was wrong:
+
+```bash
+yeet run --force <svc> ./compose.yml
+```
+
+## Stage before applying
+
+Use staging when you want to upload and inspect a payload before applying it.
+That adds a checkpoint to the deploy queue, which is useful when the payload is
+large or the timing matters:
+
+```bash
+yeet stage <svc> ./bin/<svc>
+yeet stage <svc> show
+yeet stage <svc> commit
+```
+
+Discard the staged payload:
+
+```bash
+yeet stage <svc> clear
+```
+
+## Edit env, config, or files
+
+```bash
+yeet edit <svc>
+yeet env edit <svc>
+yeet env copy <svc> ./app.env
+yeet env set <svc> PORT=8080 LOG_LEVEL=debug
+yeet copy ./config.yml <svc>:config/config.yml
+```
+
+For VM guests, copy to the VM endpoint:
+
+```bash
+yeet copy ./configs/ <vm>:~/configs/
+yeet copy <vm>:"/var/log/*.log" ./logs/
+```
+
+## Choose networking
+
+Use host ports when you only need a host-level TCP port:
+
+```bash
+yeet run -p 8080:80 <svc> nginx:alpine
+```
+
+Choose networking by access path and outbound internet path:
+
+- Use `svc` for private yeet traffic, yeet DNS, and internet egress through the
+  catch host.
+- Use `svc,ts` when the service also needs its own Tailscale identity.
+- Use `lan` when the service should request a LAN or VLAN address and use that
+  network's DHCP gateway.
+
+```bash
+yeet run <svc> ./compose.yml --net=svc
+yeet run <svc> ./compose.yml --net=svc,ts
+yeet run <svc> ./compose.yml --net=lan
+```
+
+Avoid plain `--net=ts` unless the service is intentionally tailnet-only or has
+a Tailscale exit node. See [Networking](/docs/concepts/networking) before
+using `lan`, `ts`, or combined modes on a new host. Network mode is not just
+"who can connect"; it also decides what the service can reach.
+
+## Move a service root
+
+Set the root at first deploy:
+
+```bash
+yeet run <svc> ./compose.yml --service-root=/srv/apps/<svc>
+yeet run <svc> ./compose.yml --service-root=tank/apps/<svc> --zfs
+```
+
+Stop a service before moving its existing root:
+
+```bash
+yeet stop <svc>
+yeet service set <svc> --service-root=/srv/apps/<svc> --copy
+yeet start <svc>
+```
+
+Use `--empty` instead of `--copy` when you want a new empty root. See
+[ZFS](/docs/concepts/zfs) for dataset-backed roots and snapshots. Moving a
+root is a state migration, so read the plan before applying it.
+
+## Recover data
+
+List recovery points:
+
+```bash
+yeet snapshots list <svc>
+yeet snapshots inspect <svc> <snapshot>
+```
+
+Clone first when you want to inspect recovered data safely. This keeps the
+original service out of your first recovery experiment:
+
+```bash
+yeet snapshots clone <svc> <snapshot> <svc>-recover
+yeet info <svc>-recover
+```
+
+Restore in place when you are ready:
+
+```bash
+yeet snapshots restore <svc> <snapshot> --stop --yes
+```
+
+See [ZFS](/docs/concepts/zfs) for snapshot defaults, retention, and VM recovery.
+
+## Target a host
+
+Here, `<catch-host>` is the catch Tailscale hostname, not the SSH machine host.
+SSH was for installation. Normal operations use the catch identity.
+
+```bash
+CATCH_HOST=<catch-host> yeet status
+yeet --host=<catch-host> status
+yeet status@<catch-host>
+yeet run <svc>@<catch-host> ./compose.yml
+```
+
+Save a default host:
+
+```bash
+yeet config --host=<catch-host>
+```
+
+## Remove a service
+
+Stop and uninstall the service but keep its data:
+
+```bash
+yeet rm <svc>
+```
+
+You can remove a running service directly. If Docker shutdown fails or cannot
+be verified, its configuration remains available for retrying removal.
+
+Remove service data and the local config entry too:
+
+```bash
+yeet rm --clean <svc>
+```
+
+Read the confirmation prompt before deleting data.

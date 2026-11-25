@@ -1,0 +1,206 @@
+---
+title: Containers
+description: Deploy Compose files, Dockerfiles, image refs, and small source-file services.
+---
+
+Containers are the most common yeet payload. Catch installs them as Docker
+Compose services on the target host.
+
+Use this path when the workload already has a container shape or when you want
+its runtime dependencies packaged with it. Containers reduce host drift. They
+do not eliminate networking, storage, or update decisions.
+
+Run these commands from a
+[Service Workspace](/docs/getting-started/service-workspace). The first
+successful deploy writes `yeet.toml` in the current directory.
+
+## Compose stacks
+
+Yeet detects a YAML file with a top-level `services:` key as Docker Compose.
+That file remains the center of the app's container model:
+
+```bash
+yeet run <svc> ./compose.yml
+yeet run <svc> ./compose.yml --net=lan
+```
+
+Define initial port mappings in the Compose file or pass
+`yeet run -p HOST:CONTAINER <svc> ./compose.yml` to set the mappings for the
+Compose service named `<svc>`. The `ports` list saved in `yeet.toml` is reapplied
+on redeploy, including local Compose uploads. Include every mapping you want
+to keep when supplying a port list.
+
+After deployment, use `yeet service set <svc> -p HOST:CONTAINER` to replace the
+yeet-managed published-port list for the primary service. The list is complete,
+so include every mapping you want to keep.
+
+```bash
+yeet service set <svc> -p 80:80 -p 443:443
+yeet service set <svc> --publish-reset -p 443:443
+```
+
+With `--env-file`, yeet uploads the environment before the Compose payload.
+The first payload selects its initial network even if only the environment has
+been uploaded so far. If that payload upload is interrupted, rerun the same
+command; the staged environment and configured service root are retained.
+
+```bash
+yeet run --env-file=./app.env <svc> ./compose.yml --net=lan,ts --ts-tags=tag:app
+```
+
+## Docker images
+
+If the payload looks like an OCI image reference, catch pulls it on the host and
+yeet generates the Compose wrapper. This is the fastest path for public images
+and small tests.
+
+```bash
+yeet run <svc> nginx:latest
+yeet run -p 8000:8000 <svc> ghcr.io/org/app:latest
+```
+
+For local images, push to yeet's host-side registry and run in one step:
+
+```bash
+yeet docker push <svc> <local-image>:<tag> --run
+```
+
+## Dockerfiles
+
+Dockerfile payloads are built locally for the host architecture, pushed to the
+catch host, then installed there. The build happens where you run yeet; the
+service runs where catch lives.
+
+```bash
+yeet run <svc> ./Dockerfile
+yeet run -p 8000:8000 <svc> ./Dockerfile
+```
+
+## Python and TypeScript
+
+Python and TypeScript source files are container-backed. Python runs through a
+`uv` container image, and TypeScript runs through a Deno container. This is
+useful for small services; it is not a substitute for understanding your app's
+runtime needs.
+
+```bash
+yeet run -p 8000:8000 <svc> ./server.py
+yeet run -p 8000:8000 <svc> ./server.ts
+```
+
+## Updates
+
+For Compose services, `yeet run` reuses existing images unless you ask for a
+pull. Use `--pull` for a deploy-time refresh, or use the Docker commands to
+inspect and update image state explicitly.
+
+```bash
+yeet run <svc> ./compose.yml
+yeet run --pull <svc> ./compose.yml
+yeet docker outdated
+yeet docker pull <svc>
+yeet docker update <svc...>
+yeet docker update --outdated
+```
+
+For Dockerfile, image, Python, and TypeScript payloads, re-run `yeet run` with
+the new payload or source file. If the service already exists in `yeet.toml`,
+yeet reuses the saved run options unless you explicitly change the payload
+configuration.
+
+## ZFS service roots
+
+Container services can use ZFS-backed service roots for persistent data and
+yeet-managed snapshots before redeploys or Docker image updates. This is most
+useful for apps where the data directory matters more than the container image.
+
+```bash
+yeet run <svc> ./compose.yml --service-root=tank/apps/<svc> --zfs
+yeet docker update <svc>
+```
+
+With `--zfs`, `--service-root` is a dataset name, not a filesystem path. Catch
+accepts an existing dataset or creates it, then uses its mountpoint as the
+service root. See [ZFS](/docs/concepts/zfs) for snapshot defaults, retention,
+and service-root moves.
+
+## Networking
+
+Use `svc` when the service needs private yeet traffic, yeet DNS, and outbound
+internet through the catch host. Use `svc,ts` when the service also needs its
+own Tailscale identity.
+
+Use `lan` when the service should request a LAN or VLAN address and use that
+network's DHCP gateway. Use `lan,ts` when the service needs both LAN presence
+and a Tailscale identity.
+
+```bash
+yeet run <svc> ./compose.yml --net=svc
+yeet run <svc> ./compose.yml --net=svc,ts --ts-tags=tag:app
+yeet run <svc> ./compose.yml --net=lan
+yeet run <svc> ./compose.yml --net=iso
+```
+
+These `yeet run` flags choose the initial network. Change an existing container
+service with `service set`; the mutation restarts it immediately:
+
+```bash
+yeet service set <svc> --net=iso
+yeet service set <svc> --net=ts --ts-tags=tag:app
+yeet service set <svc> --net=host
+yeet service set <svc> --ts-exit=
+```
+
+`--net` replaces all modes. Other supplied network flags patch one stored
+setting, and an explicit empty value clears an optional setting. A resulting
+mode set that includes `ts` requires at least one Tailscale tag. Rerunning
+`yeet run` with different network settings for an existing service stops with
+`service set` guidance; payload-only and unrelated redeployments still work.
+If the remote change succeeds but the local `yeet.toml` update fails, run
+`yeet service sync <svc>`.
+
+Avoid plain `--net=ts` unless the service is tailnet-only or has a Tailscale
+exit node. See [Networking](/docs/concepts/networking) for mode details and
+internet egress behavior.
+See [DNS](/docs/concepts/dns) for service discovery between `svc` services,
+including short names and `*.yeet.internal` names.
+
+Use `iso` when the image or application is untrusted and needs public IPv4
+egress but must not initiate traffic to Catch, LAN, `svc`, Tailscale, or another
+isolated project. Catch can still connect to every component on any port. Use
+`iso,ts` only when the service also needs an explicit Tailscale identity.
+
+iso works with images, client-built Dockerfiles, Python, TypeScript, and an
+admitted Compose subset. It rejects published ports, host networking, elevated
+privileges and host namespaces, unsafe mounts or runtime sockets, custom DNS,
+extra networks, Catch-side Compose builds, replicas, and unknown service fields.
+The error names the rejected Compose field. Components in the same admitted
+project may communicate; other projects cannot. See
+[Networking](/docs/concepts/networking#isolated-network-iso) for the complete
+contract and limitations.
+
+## Inspect and clean up
+
+```bash
+yeet info <svc>
+yeet ip <svc>
+yeet logs -f <svc>
+yeet restart <svc>
+yeet rm <svc>
+```
+
+Use `yeet rm --clean <svc>` when you also want to remove service data under the
+managed service root and delete the local `yeet.toml` entry. Read the
+confirmation prompt before accepting.
+
+## Host requirements
+
+Docker hosts need Docker with Compose support. On Debian/Ubuntu-style hosts,
+interactive `yeet init` asks before installing Docker and configures the Docker
+settings needed for local image pushes.
+
+See [DNS](/docs/concepts/dns) for resolver behavior,
+[Host Setup](/docs/getting-started/host-setup) for host setup, and
+[Workflows](/docs/operations/workflows) for common update flows. ZFS is
+optional; see [ZFS](/docs/concepts/zfs) if you want dataset-backed service
+roots.

@@ -1,0 +1,216 @@
+---
+title: Native Sandboxing
+description: Control the filesystem and namespace view of native binaries, scripts, and scheduled jobs.
+---
+
+Fresh native binaries, shebang scripts, and scheduled jobs run through
+Bubblewrap by default. The sandbox gives the workload its service data and the
+runtime files it needs without exposing the host filesystem as a whole.
+
+Use a non-root service account for untrusted code. Native sandboxing reduces
+filesystem and process visibility, but it shares the host kernel and is not a
+VM security boundary.
+
+## Start a sandboxed service
+
+No sandbox flag is required for a fresh native service:
+
+```bash
+yeet run api ./api
+yeet info api
+```
+
+`yeet info` reports the authoritative sandbox state and any extra read-only or
+writable exposures. Add exposures when the workload needs paths outside its
+default view:
+
+```bash
+yeet run api ./api --sandbox-ro=/etc/api --sandbox-rw=/srv/api-cache:/cache
+```
+
+The sandbox state and normalized exposure lists are saved in the service's
+active generation and in a matching `yeet.toml` entry after Catch succeeds.
+Rollback restores the policy from the selected generation.
+
+## Default filesystem view
+
+The default sandbox starts from an empty root and adds only these paths:
+
+| Path or resource                                                         | Access                                              |
+| ------------------------------------------------------------------------ | --------------------------------------------------- |
+| Service data directory                                                   | Read-write and used as `HOME`                       |
+| Immutable payload                                                        | Read-only                                           |
+| Required host runtime trees such as `/usr`, `/bin`, `/lib`, and `/lib64` | Read-only when present                              |
+| Required resolver, identity, time zone, OS, and CA files from `/etc`     | Read-only                                           |
+| `/tmp` and `/run`                                                        | Private temporary filesystems                       |
+| `/proc` and minimal `/dev`                                               | Private process and device views                    |
+| Operator exposures                                                       | Access selected by `--sandbox-ro` or `--sandbox-rw` |
+
+The environment file is read by systemd before Bubblewrap starts and does not
+need to be mounted. `/root`, `/home`, `/var`, `/sys`, arbitrary host files, and
+other services' roots are absent unless the fixed runtime policy or an
+explicit exposure adds them.
+
+Read-only runtime trees do not mean the whole host root is mounted read-only.
+Paths outside the constructed view do not exist inside the sandbox.
+
+## Expose additional paths
+
+Use `--sandbox-ro` for a read-only file or directory. Use `--sandbox-rw` for a
+writable directory. Writable regular files are not supported.
+
+Both flags are repeatable and accept either form:
+
+```text
+SOURCE
+SOURCE:DEST
+```
+
+`SOURCE` is an absolute path on the Catch host. `DEST` is an optional absolute
+path inside the sandbox. When `DEST` is omitted, the object appears at the same
+absolute path. Literal colons, relative paths, globbing, devices, sockets,
+FIFOs, dangling links, and overlapping destinations are rejected.
+
+When sandbox state is `on`, the source must exist and be accessible to the
+workload's configured UID and GID. State `off` keeps exposure configuration
+dormant and performs the host-path checks when the policy is activated later.
+
+An exposure-only `service set` command changes an `off` service to `on`. To
+edit the dormant list without activating it, explicitly retain `off` in the
+same command:
+
+```bash
+yeet service set api --sandbox=off --sandbox-ro=/etc/api
+```
+
+### Preserve or replace a list
+
+Each read-only or writable list mentioned in `yeet service set` is the complete
+desired list for that access class. An unmentioned class stays unchanged.
+Catch refuses to remove an existing entry unless the command includes that
+class's `reset` token.
+
+If `/etc/api` is already read-only, preserve it while adding `/etc/ssl`:
+
+```bash
+yeet service set api --sandbox-ro=/etc/api --sandbox-ro=/etc/ssl
+```
+
+Replace the read-only list instead:
+
+```bash
+yeet service set api --sandbox-ro=reset --sandbox-ro=/etc/api
+```
+
+Use `--sandbox-rw=reset` in the same way for writable directories. Reset is a
+control value for `yeet service set`; it is not a path, it is not stored in
+`yeet.toml`, and it is not valid on the initial `yeet run`.
+
+## Choose a state for an existing service
+
+Native services have three reported states:
+
+| State    | Meaning                                                                          |
+| -------- | -------------------------------------------------------------------------------- |
+| `legacy` | The active generation predates sandbox metadata and runs the payload directly.   |
+| `on`     | Bubblewrap runs the payload with the recorded policy.                            |
+| `off`    | The operator explicitly chose direct execution. Stored exposures remain dormant. |
+
+Existing native services remain `legacy` during Yeet and Catch upgrades. Make
+the choice one service at a time:
+
+```bash
+yeet service set api --sandbox=on
+yeet service set api --sandbox=off
+```
+
+The command accepts `on` or `off`. `legacy` is a reported compatibility state,
+not a selectable flag value. Exposure-only changes to a legacy service are
+rejected until the same operation explicitly chooses `on` or `off`.
+Exposure-only changes to an `off` service instead imply `on`; repeat
+`--sandbox=off` in that operation when the new exposures should remain
+dormant.
+
+An existing-service `yeet run` preserves Catch's active sandbox policy. If the
+resolved run would change that policy, Yeet stops before redeployment and
+prints the equivalent `yeet service set` command.
+
+Sandbox settings form one mutation family. They can be combined with each
+other, but not with identity, network, storage, schedule, publication, or
+snapshot changes in the same `service set` command. Apply those changes in
+separate operations.
+
+## Identity, network, and cgroups
+
+The sandbox creates new user, PID, IPC, and UTS namespaces. It preserves the
+configured numeric workload UID and GID inside the user namespace.
+
+Bubblewrap does not create a network or cgroup namespace. The workload inherits
+the host or Yeet-managed network namespace and the systemd cgroup already
+selected for the service. Sandbox state, `--run-as`, and network mode are
+independent settings.
+
+`--run-as=root` does not disable the sandbox. Use `--sandbox=off` only when the
+workload deliberately needs direct host filesystem behavior:
+
+```bash
+yeet service set api --sandbox=off
+```
+
+A root workload still shares the host kernel. Sandboxing limits its normal
+view, but an escape has host-root consequences. Use a VM when the workload
+needs a hardware-backed isolation boundary.
+
+## Bubblewrap installation
+
+Catch installs and functionally probes the trusted `/usr/bin/bwrap` binary at
+these intent boundaries:
+
+1. A genuinely fresh Catch installation.
+2. A new native run or another native activation whose resulting state is
+   `on`.
+3. `yeet service set` when the resulting state is `on`.
+
+Installing or upgrading Yeet, or upgrading an existing Catch installation,
+does not install Bubblewrap. A `legacy` or `off` service does not require it.
+An exposure edit remains `off` only when the same command explicitly includes
+`--sandbox=off`; that dormant edit does not install Bubblewrap. Without the
+state flag, an exposure-only edit results in `on`, so Catch installs and probes
+Bubblewrap before activation.
+
+Catch verifies the binary's ownership and permissions and runs a functional
+namespace probe as a fixed non-root identity. On compatible Ubuntu hosts where
+AppArmor restricts unprivileged user namespaces, Catch installs and loads the
+exact Yeet-owned profile at `/etc/apparmor.d/yeet-bwrap`, then repeats the
+functional and security probes. Debian and hosts without that restriction use
+only the Bubblewrap package.
+
+Catch never disables AppArmor or changes a host-wide user-namespace sysctl. If
+the managed path contains different content, Catch preserves it and stops with
+recovery guidance. See
+[Troubleshooting](/docs/operations/troubleshooting#native-sandbox-activation-fails)
+for package and policy checks.
+
+## Scheduled jobs
+
+Scheduled native jobs use the same default policy and controls:
+
+```bash
+yeet run backup ./backup --cron="0 3 * * *"
+yeet service set backup --sandbox=on
+```
+
+Changing a scheduled job's sandbox policy replaces and verifies both its
+service and timer units. Catch does not run the job payload as a migration
+test. The timer retains its enabled or waiting intent after the change.
+
+## Local configuration
+
+Project configuration stores the authoritative explicit state and normalized
+exposures as `sandbox`, `sandbox_ro`, and `sandbox_rw`. Run
+`yeet service sync <svc>` if Catch changed successfully but the matching local
+configuration could not be updated.
+
+See [Configuration](/docs/concepts/configuration-and-prefs) for the TOML shape
+and [First-Run Validation](/docs/getting-started/first-run-validation) for a
+disposable proof of the filesystem view.

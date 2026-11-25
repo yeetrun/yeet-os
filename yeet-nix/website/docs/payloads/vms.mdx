@@ -1,0 +1,676 @@
+---
+title: VMs
+description: Create Ubuntu, NixOS, or imported Linux microVMs for workloads that need a full OS.
+---
+
+Use a VM payload when a workload needs a long-lived Linux guest, its own init
+system, or stronger isolation than a container. Yeet calls these VMs in the
+CLI, but the useful product shape is a microVM: small enough for homelab
+service work, still a real guest OS.
+
+VM payloads require a Linux catch host with KVM. If you are setting up a host
+for the first time, run the container smoke test before starting here.
+
+VMs boot, consume memory, own disks, have networking, and keep their own
+secrets. Use them when that tradeoff is worth it.
+
+Run VM creation commands from a
+[Service Workspace](/docs/getting-started/service-workspace). The first
+successful VM deploy writes `yeet.toml` in the current directory.
+
+## Choose an image
+
+Yeet currently has two official catalog images:
+
+| Payload             | Guest        |
+| ------------------- | ------------ |
+| `vm://ubuntu/26.04` | Ubuntu 26.04 |
+| `vm://nixos/26.05`  | NixOS 26.05  |
+
+Official image bundles are built and published from
+[yeetrun/yeet-vm-images](https://github.com/yeetrun/yeet-vm-images). That repo
+owns the public catalogs, release manifests, root filesystems, boot kernels,
+host Firecracker runtimes, and guest package-source defaults. Yeet reads those
+catalogs from there, so normal official component updates do not require a Yeet
+code release.
+
+List what the selected catch host can use:
+
+```bash
+yeet vm images catalog
+```
+
+If you have your own root filesystem, import it under a local name and run it
+as `vm://<name>`:
+
+```bash
+yeet vm images import lab/debian ./dist/my-vm
+yeet run devbox vm://lab/debian
+```
+
+See [Bring your own microVM image](#bring-your-own-microvm-image) for the
+bundle shape.
+
+## Create a microVM
+
+Create an Ubuntu microVM:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04
+yeet ssh <vm>
+```
+
+Create a NixOS microVM:
+
+```bash
+yeet run <vm> vm://nixos/26.05
+yeet ssh <vm>
+```
+
+`yeet run` creates the VM service. Use `yeet vm set` for supported changes. To
+replace the guest, remove the VM and create it again.
+
+Override the starting shape when needed:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04 --vcpus=4 --memory=4g --disk=128g
+```
+
+## Choose VM memory behavior
+
+`--memory` is the VM's maximum RAM. Firecracker ballooning is enabled by default,
+so catch can reclaim guest memory under host pressure without lowering the
+configured maximum. This does not increase available host memory.
+
+Set the minimum floor when you create the VM:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04 --memory=4g --memory-min=1g
+```
+
+`--memory-min` is the floor yeet will not intentionally reclaim below. Change
+it later with:
+
+```bash
+yeet vm set <vm> --memory-min=2g
+```
+
+Disable ballooning when a VM should reserve its full maximum memory:
+
+```bash
+yeet vm set <vm> --balloon=off
+```
+
+Host memory policy defaults to `safe`, which admits VMs against their maximum
+RAM. Opt into controlled overcommit only when you want catch to use VM memory
+floors for admission:
+
+```bash
+yeet vm memory set --policy=balanced
+```
+
+## Choose VM networking
+
+`svc` networking is the default. It gives yeet a private management path, yeet
+DNS, and outbound internet through the catch host:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04 --net=svc
+```
+
+Use `lan` when the VM should request a LAN or VLAN address through DHCP. The VM
+uses that network's gateway and DNS for ordinary internet access. If that
+network has bad DHCP, bad DNS, or no gateway, the VM inherits that behavior:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04 --net=lan
+```
+
+For VM LAN networking, catch attaches the guest TAP device to a host bridge. If
+the host already has a bridge on the default LAN route, yeet uses it. On
+supported Debian/Ubuntu hosts without a bridge, yeet can prepare `br0` from the
+default LAN uplink after you confirm.
+
+Interactive `yeet init` offers that bridge preparation when VM support is
+available. You can also skip it during init; the first `yeet run <vm> ...
+--net=lan` prompts before creating VM files or database state. If the host
+briefly drops the connection while applying the bridge, wait for it to come
+back and rerun the same `yeet run` command. Bridge changes are real host
+network changes.
+
+Use `svc,lan` when the VM needs host LAN access and should still keep a
+catch-managed fallback path:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04 --net=svc,lan
+```
+
+With `svc,lan`, yeet uses the LAN IP when your workstation can reach it and
+falls back to the catch proxy when it cannot. Force the proxy path with:
+
+```bash
+yeet ssh --force-proxy <vm>
+```
+
+Use `iso` when the guest is untrusted and needs the public IPv4 internet but
+must not initiate traffic to Catch, LAN, `svc`, another iso project, or other
+private address space:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04 --net=iso
+```
+
+The VM gets a stable RFC1918 address and public-only DNS. Catch can initiate
+connections to the guest on any port, and `yeet ssh <vm>` automatically uses
+Catch's existing proxy path because the workstation normally has no direct
+route to the iso address. Public and LAN clients do not gain an ingress path.
+IPv6 is disabled on the iso attachment.
+
+VM `iso` cannot combine with `svc`, `lan`, or Yeet-managed `ts`.
+
+VM network modes do not include `ts`. If an iso guest needs its own Tailscale
+identity, install and configure Tailscale inside the guest. At that point the
+guest is the actor joining the tailnet, which is the right boundary.
+
+See [Networking](/docs/concepts/networking) and [DNS](/docs/concepts/dns) for
+service-network names and LAN behavior.
+
+## Connect and copy files
+
+Open an interactive shell:
+
+```bash
+yeet ssh <vm>
+```
+
+Run one command:
+
+```bash
+yeet ssh <vm> -- uname -a
+```
+
+Follow VM logs:
+
+```bash
+yeet logs -f <vm>
+```
+
+VM logs include guest serial output and Firecracker warnings and errors.
+Routine Firecracker API requests, including memory-balloon polling, are quiet.
+The logging level takes effect when the VM starts; after updating catch, restart
+a running VM to apply it.
+
+Stream the serial console for boot diagnostics:
+
+```bash
+yeet vm console <vm>
+```
+
+Detach from the console by pressing Enter, then typing `~.`. The VM keeps
+running. The console is a window into the guest, not a lifecycle command.
+
+Copy files with VM endpoints:
+
+```bash
+yeet copy ./app <vm>:~/app
+yeet copy ./configs/*.yml <vm>:~/configs/
+yeet copy <vm>:"/var/log/*.log" ./logs/
+yeet copy --force-proxy ./configs/ <vm>:~/configs/
+```
+
+Ubuntu VMs default to the `ubuntu` user. NixOS VMs default to the `nixos` user.
+
+## Change a VM
+
+Stop the VM before changing CPU, memory, disk size, or networking:
+
+```bash
+yeet stop <vm>
+yeet vm set <vm> --vcpus=6 --memory=6g
+yeet vm set <vm> --disk=128g
+yeet vm set <vm> --net=svc,lan
+yeet start <vm>
+```
+
+Disk changes are grow-only. Shrinking disks and live resize are not supported.
+
+For VLAN-tagged LAN networking:
+
+```bash
+yeet stop <vm>
+yeet vm set <vm> --net=svc,lan --macvlan-parent=<iface> --macvlan-vlan=<id>
+yeet start <vm>
+```
+
+## Host VMM isolation
+
+Yeet launches Firecracker through the matching Firecracker jailer. Catch
+prepares the VM's host resources as root, and the jailer runs the VMM as the
+static, non-login `yeet-vm` host account. This host account is separate from
+the VM guest login user and from native-service `--run-as` identities.
+
+The jailer builds a private filesystem view and provides only the host
+resources the VM needs. Yeet automatically creates `yeet-vm` on the first VM
+preparation or during an upgrade that finds VMs. Custom data roots, custom
+service roots, and ZFS-backed VM storage remain supported because Yeet derives
+their paths from stored configuration.
+
+Check the host process boundary with:
+
+```bash
+yeet info <vm>
+```
+
+The `VMM isolation` row shows `jailer` or `jailer (pending restart)`.
+
+During a Catch upgrade, Yeet does not restart an already running VM. The VM
+crosses the jailer boundary on its next restart. If preparation fails, the VM
+remains stopped.
+
+## Manage the host Firecracker runtime
+
+A VM has several independent moving parts:
+
+- The guest image supplies the initial root filesystem. Refreshing the image
+  cache affects future VM creates, not existing disks.
+- Guest package updates happen inside the VM.
+- `yeet vm kernel sync <vm>` selects the guest kernel.
+- `yeet vm runtime` manages one exact host Firecracker and matching jailer
+  pair.
+
+The guest login user, such as `ubuntu` or `nixos`, is also separate from the
+host `yeet-vm` account that runs Firecracker. Native-service `--run-as` users
+are unrelated to both.
+
+Inspect the runtime lifecycle before changing it:
+
+```bash
+yeet vm runtime status
+yeet vm runtime status <vm> --format=json-pretty
+```
+
+Runtime status lists every VM, including those whose component metadata is
+missing. A `metadata-missing` row means Catch cannot report a verified runtime
+identity from its database. Run Catch install/upgrade to verify adoption and
+inspect its per-VM warnings if recovery is blocked.
+
+For VMs that already have a verified runtime descriptor, Catch can reconstruct
+missing component metadata without restarting the guest or changing its disk,
+unit, or runtime descriptor. It retains configured and previous runtimes and
+uses manual/stable policy because the lost policy cannot be inferred. Guest and
+kernel provenance is measured from the existing host artifacts. Staged trials,
+untrusted artifacts, and inconsistent paths block recovery and are left intact
+for operator inspection.
+
+The important identities are:
+
+| Field        | Meaning                                                                  |
+| ------------ | ------------------------------------------------------------------------ |
+| `running`    | The exact pair used by the live Firecracker process.                     |
+| `configured` | The pair selected for an ordinary start.                                 |
+| `staged`     | A candidate waiting for the next start. Staging does not restart the VM. |
+| `previous`   | The last healthy configured pair retained for rollback.                  |
+
+IDs and SHA-256 digests are part of the identity. Yeet never substitutes a
+different Firecracker or jailer under an existing ID.
+
+### Manual upgrades
+
+Manual policy is the default. Refreshing the runtime cache does not change a
+VM:
+
+```bash
+yeet vm runtime update
+```
+
+Stage the promoted stable runtime and inspect the result:
+
+```bash
+yeet vm runtime upgrade <vm>
+yeet vm runtime status <vm>
+```
+
+The running PID and `running` identity stay unchanged. When downtime is
+acceptable, either restart the VM normally or ask the upgrade command to run
+the trial immediately:
+
+```bash
+yeet vm runtime upgrade <vm> --restart
+```
+
+The new pair must pass host readiness before it becomes `configured`. If it
+does not, the launcher starts the configured pair again and records a failed,
+rolled-back trial. Roll back a healthy upgrade explicitly with:
+
+```bash
+yeet vm runtime rollback <vm>
+yeet vm runtime rollback <vm> --restart
+```
+
+Without `--restart`, rollback is staged for the next start.
+
+### Stage on restart policy
+
+Opt in per host or per VM when you want Catch upgrades to stage a newer
+promoted runtime while still leaving running VMs alone:
+
+```bash
+yeet vm runtime policy defaults set stage-on-restart --channel=stable
+yeet vm runtime policy <vm> stage-on-restart --channel=stable
+yeet vm runtime policy <vm> inherit
+```
+
+The policy only stages. A later operator restart or natural guest reboot
+consumes the staged pair. Package managers and the guest agent cannot request,
+select, download, or stage a host runtime. A reboot request from inside the
+guest therefore changes the host runtime only when trusted host state already
+contains a staged candidate.
+
+`yeet vm kernel sync <vm>` changes only the guest-kernel selection. If you add
+`--restart` while a host runtime is staged, that one restart can activate both
+independent selections; kernel synchronization still does not choose or stage
+the host runtime.
+
+The `candidate` channel is explicit opt-in:
+
+```bash
+yeet vm runtime upgrade <vm> --channel=candidate
+yeet vm runtime upgrade <vm> --channel=candidate --restart
+```
+
+Do not set a fleet policy to `candidate` unless the whole fleet is intended to
+follow that channel. Catalog support states are also visible in runtime status.
+An `eol` runtime can keep running but should be scheduled for replacement. A
+`revoked` runtime cannot be newly selected; Yeet reports the existing state and
+leaves the restart decision to the operator instead of forcing downtime.
+
+### Recovery and cache retention
+
+An explicit runtime trial on a ZFS-backed VM creates a protected disk recovery
+point before restart. A healthy trial unprotects it so ordinary retention can
+manage it. A failed trial leaves it protected for inspection. This disk
+recovery point is separate from launcher rollback and contains no guest memory
+or Firecracker process state.
+
+Raw-disk VMs still get launcher rollback to the configured runtime, but they do
+not get a pre-upgrade disk recovery point. Yeet prints that limitation before
+the restart. A natural reboot that consumes a staged runtime also does not
+create an operator-requested pre-upgrade disk recovery point.
+
+Preview runtime cache cleanup before applying it:
+
+```bash
+yeet vm runtime prune --dry-run
+yeet vm runtime prune
+```
+
+Pruning retains every runtime referenced by a configured, staged, previous, or
+running selection, an unfinished transaction, the promoted stable channel, or
+an operator protection:
+
+```bash
+yeet vm runtime protect <runtime-id>
+yeet vm runtime unprotect <runtime-id>
+```
+
+### Import a custom host runtime
+
+A custom runtime directory must contain `runtime-manifest.json`, `firecracker`,
+and the matching `jailer`. Importing validates and stores an immutable local
+alias; it does not restart a VM:
+
+```bash
+yeet vm runtime import lab-v1 ./dist/runtime
+yeet vm runtime upgrade <vm> --to=local:lab-v1
+```
+
+Local and custom legacy runtimes are not advanced by official-channel policy.
+Select another exact local alias or a full official runtime ID when you want to
+leave them.
+
+## Host requirements
+
+VM payloads require:
+
+- x86_64/amd64 Linux.
+- KVM at `/dev/kvm`.
+- TUN/TAP at `/dev/net/tun`.
+- `qemu-img`, `zstd`, `e2fsck`, `resize2fs`, `mount`, `umount`, and `ip`.
+- An executable Catch data filesystem. Transient jails live below
+  `<data-root>/vm-jailer`; Catch reports a clear error when that mount uses
+  `noexec`.
+
+On Debian/Ubuntu hosts with KVM and TUN/TAP available, interactive `yeet init`
+can prompt to install missing VM tools and prepare VM LAN bridge support.
+
+Automatic VM LAN bridge preparation supports Debian/Ubuntu
+netplan-networkd hosts with a physical default-route LAN uplink. Hosts that
+already route through a bridge reuse that bridge without rewriting the host
+network.
+
+Many VPS providers do not expose nested virtualization. Use containers,
+binaries, scripts, and cron jobs on those hosts, and run VMs on a KVM-capable
+machine.
+
+## Image cache
+
+Catch caches official VM images per host. A missing image downloads
+automatically on the first VM create.
+
+```bash
+yeet vm images catalog
+yeet vm images
+yeet vm images update
+yeet vm images update vm://nixos/26.05
+yeet vm images prune --dry-run
+```
+
+`yeet vm images update` refreshes official image families for future VM
+creates. It may download a newer promoted guest base or kernel, but it does not
+rewrite VM disks, change an existing VM's component lock, select a host runtime,
+or restart a VM.
+
+New VMs pin an immutable composition with three independent identities: the
+initial guest root filesystem, the boot kernel, and the matching host
+Firecracker+jailer pair. Guest package updates remain ordinary in-guest package
+operations. A kernel selector installed by a guest package is only an untrusted
+request: Catch resolves it through the verified host kernel catalog when an
+operator runs `yeet vm kernel sync <vm>`. The guest and guest agent cannot
+select, download, stage, or promote a host runtime.
+
+VMs created from older monolithic bundles keep their exact image version and
+paths. Catch measures the rootfs, effective kernel, Firecracker, and jailer and
+records an immutable component composition without restarting the VM or
+replacing its disk. If those artifacts cannot be verified, the VM stays on its
+existing launch paths. Install/upgrade reports the adoption-blocked reason, and
+runtime status retains a `metadata-missing` row.
+
+When creating a VM with a stale cached image, interactive runs prompt by
+default. For non-interactive runs, choose explicitly:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04 --image-policy=update
+yeet run <vm> vm://ubuntu/26.04 --image-policy=cached
+```
+
+Preview cleanup before removing cached image data:
+
+```bash
+yeet vm images prune --dry-run
+```
+
+## ZFS-backed VM disks
+
+ZFS is optional. Use it when you want storage-level recovery points or faster
+repeated VM creates on the same pool:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04 --service-root=tank/vms/<vm> --zfs
+```
+
+For ZFS-backed VMs, yeet can clone a shared image base on the same pool instead
+of writing the root filesystem again. Raw VM disks work without ZFS. Faster
+clone paths are useful, but optional. Raw-disk VMs cannot use snapshot or
+restore commands.
+
+See [ZFS](/docs/concepts/zfs) for dataset, snapshot, and cleanup behavior.
+
+## VM snapshots and restore
+
+Create a manual recovery point:
+
+```bash
+yeet snapshots create <vm>
+yeet snapshots create <vm> --comment "before package upgrade"
+```
+
+List and inspect recovery points:
+
+```bash
+yeet snapshots list <vm>
+yeet snapshots inspect <vm> <snapshot>
+```
+
+Clone first when you want to inspect a recovered disk without changing the
+original VM:
+
+```bash
+yeet snapshots clone <vm> <snapshot> <new-vm>
+yeet info <new-vm>
+```
+
+Restore the original VM disk in place:
+
+```bash
+yeet snapshots restore <vm> <snapshot> --stop --start --yes
+```
+
+For a running VM, catch pauses the guest while it takes one atomic ZFS snapshot
+of the disk, then resumes it. The result is crash-consistent: the disk is
+internally stable at one instant, but applications inside the guest do not run
+their own backup hooks. The recovery point contains disk state only. It does not
+contain guest memory or VMM runtime state.
+
+Restore replaces the active VM disk state. It does not restore the running
+processes or runtime state from the time of the snapshot. A running VM requires
+`--stop`; add `--start` to boot it after restore. Yeet creates a pre-restore disk
+recovery point before replacing the disk.
+
+### Compatibility: retired VM recovery data
+
+Catch upgrades stop when they find recovery data created by the retired VM
+runtime-state format. Catch reports two independent artifact types: checkpoint
+directories and ZFS recovery points. Work from the exact paths and recovery-point
+names in that report.
+
+For each reported checkpoint directory, archive or remove the entire reported
+directory. Do not remove only `memory.bin` and `firecracker-state.bin`: Catch
+checks the directory entry itself, so an empty checkpoint directory still blocks
+the upgrade.
+
+For each ZFS recovery point reported as `checkpoint=full`, choose one of these
+paths. Remove that recovery point:
+
+```bash
+yeet snapshots rm <vm> <snapshot>
+```
+
+Or, only after every retired runtime-state file and checkpoint directory has
+been removed, and only if you intentionally retain its disk state, retag that
+exact ZFS snapshot. Run this as root on the catch host:
+
+```bash
+zfs set com.yeetrun:checkpoint=disk <pool/dataset>@<snapshot>
+```
+
+Retry the catch upgrade after you have handled every path and recovery-point
+name Catch reports.
+
+## Bring your own microVM image
+
+Use an imported image when Ubuntu and NixOS are not the guest shape you want.
+The bundle is a local directory. Yeet tars it, streams it to catch, and catch
+stores it in the host image cache. The imported ref becomes `vm://<name>`.
+
+The smallest useful bundle is one root filesystem:
+
+```text
+dist/my-vm/
+  rootfs.ext4
+```
+
+`rootfs.ext4.zst` also works. Use a lowercase image name such as `lab/debian`
+or `team/nixos-fast`. Names under official catalog prefixes such as `ubuntu/...`
+and `nixos/...` are reserved for the catalog.
+
+Import and run it:
+
+```bash
+yeet vm images import lab/ubuntu ./dist/my-vm
+yeet run devbox vm://lab/ubuntu
+```
+
+The easy path omits the kernel. Yeet uses its managed kernel and runtime assets
+with your root filesystem. If the bundle includes `vmlinux`, import rejects it
+unless you opt in:
+
+```bash
+yeet vm images import kernel/test ./dist/my-vm --allow-local-kernel
+```
+
+Use a local kernel only when you know it matches the root filesystem. A
+mismatched kernel/rootfs pair usually fails at boot, and yeet cannot make that
+debuggable after the fact.
+
+If the guest needs metadata that yeet cannot infer from the root filesystem,
+add `manifest.json` beside `rootfs.ext4`:
+
+```json
+{
+  "default_user": "debian",
+  "metadata_driver": "ubuntu"
+}
+```
+
+`default_user` controls the user `yeet ssh` and `yeet copy` try first.
+`metadata_driver` can be `ubuntu` or `nixos`. For NixOS-style images that use
+yeet guest init, include `guest_system_init` when the system init path is not
+the default path the image expects.
+
+Re-importing the same image name does not change a VM that was already created.
+A later VM creation uses the re-imported image. A running guest does not mutate
+because an image ref moved.
+
+Remove an imported image:
+
+```bash
+yeet vm images rm lab/ubuntu --yes
+```
+
+## Cleanup
+
+Uninstall the VM service but keep its disk:
+
+```bash
+yeet rm <vm>
+```
+
+Delete the guest disk and local config entry too:
+
+```bash
+yeet rm --clean <vm>
+```
+
+For ZFS-backed VMs, cleanup removes the VM clone and service data. It does not
+remove shared image bases that future VMs can reuse. Shared bases are cache
+state.
+
+## Related docs
+
+- [Host Setup](/docs/getting-started/host-setup) covers host bootstrap.
+- [Networking](/docs/concepts/networking) covers `svc`, `lan`, service
+  combinations, and internet egress paths.
+- [DNS](/docs/concepts/dns) covers service-network names.
+- [ZFS](/docs/concepts/zfs) covers dataset-backed roots, snapshots, and VM disk
+  clones.
+- [Workflows](/docs/operations/workflows) has compact daily recipes.

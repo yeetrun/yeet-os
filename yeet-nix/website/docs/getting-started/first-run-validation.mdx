@@ -1,0 +1,320 @@
+---
+title: First-Run Validation
+description: Smoke-test a fresh host before you trust it with real services.
+---
+
+Use this playbook after `yeet init` on a fresh host. It checks the connection
+to catch first, then the payload paths that should work on a normal
+Debian/Ubuntu-style server. Run the optional KVM, LAN, and ZFS checks only when
+you plan to use those features.
+
+Run these tests before deploying a real app or storing real data.
+
+All examples use disposable service names. If you have more than one catch
+host, set `CATCH_HOST=<catch-host>` or pass `--host=<catch-host>` so every
+command targets the fresh host.
+
+Run this playbook from your
+[Service Workspace](/docs/getting-started/service-workspace), or from a
+temporary validation directory. Smoke deploys write `yeet.toml` in the current
+directory. If you use a temporary directory, delete it when you are done.
+
+## 1) Confirm catch is reachable
+
+```bash
+CATCH_HOST=<catch-host> yeet version
+CATCH_HOST=<catch-host> yeet status
+```
+
+If this is your only catch host, the unqualified commands should work too:
+
+```bash
+yeet version
+yeet status
+```
+
+On a host using the default filesystem layout, confirm Catch state exists at
+`/var/lib/yeet` and the default service root is below it:
+
+```bash
+yeet ssh -- test -d /var/lib/yeet
+yeet ssh -- test -d /var/lib/yeet/services
+```
+
+Skip these path checks when you selected custom roots or ZFS during init. Those
+roots are preserved instead of being rewritten to the filesystem defaults.
+
+If you have Tailscale installed locally, `yeet list-hosts` can also confirm the
+catch node is visible in your tailnet. It is optional for this playbook because
+normal yeet commands use the catch Tailscale identity and ordinary network
+reachability from your workstation.
+
+If `yeet status` cannot connect, confirm `yeet init` stored a Tailscale OAuth
+client secret or catch-node auth key, and confirm the catch node has the
+required tag. After fixing the tag or policy, rerun init:
+
+```bash
+yeet init root@<machine-host>
+```
+
+See [Tailscale](/docs/concepts/tailscale) if the SSH machine host and catch
+host names are confusing, or if the tailnet policy needs `tagOwners`/grant
+changes before catch can use the tag you selected.
+
+## 2) Smoke-test Docker image payloads
+
+This validates the most common path: Docker on the host, published host ports,
+service status, logs, and cleanup.
+
+```bash
+yeet run -p 18080:80 yeet-smoke-web nginx:alpine
+yeet status yeet-smoke-web
+yeet info yeet-smoke-web
+yeet logs yeet-smoke-web
+```
+
+From the catch host itself, confirm the published port answers:
+
+```bash
+yeet ssh -- curl -fsS http://127.0.0.1:18080/ >/dev/null
+```
+
+Then remove the disposable service:
+
+```bash
+yeet rm --clean yeet-smoke-web
+```
+
+`--clean` deletes the service data and removes the disposable `yeet.toml`
+entry, so read the confirmation prompt before accepting.
+
+If this fails, start with
+[Docker payloads fail](/docs/operations/troubleshooting#docker-payloads-fail).
+
+## 3) Prove native sandboxing and script identity
+
+This validates a fresh native sandbox without involving containers. It proves
+service-data writes, a remapped read-only file, a remapped writable directory,
+a hidden host sentinel, authoritative info state, and the explicit `off`
+escape hatch.
+
+Create disposable host fixtures. The read-only source is world-readable, the
+writable directory is available to the default service account, and the
+sentinel must not appear in the sandbox:
+
+```bash
+yeet ssh -- sh -lc '
+printf "read-only-proof\n" >/tmp/yeet-smoke-sandbox-ro.txt
+install -d -m 0777 /tmp/yeet-smoke-sandbox-rw
+printf "host-only\n" >/var/tmp/yeet-smoke-sandbox-hidden
+'
+```
+
+Create the disposable payload locally:
+
+```bash
+cat > yeet-smoke-sandbox.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -r /proof/input.txt ]]; then
+  [[ "$(cat /proof/input.txt)" == "read-only-proof" ]]
+  if printf "unexpected-write\n" >>/proof/input.txt 2>/dev/null; then
+    exit 1
+  fi
+  [[ ! -e /var/tmp/yeet-smoke-sandbox-hidden ]]
+  printf "writable-proof\n" >/cache/from-sandbox.txt
+  printf "sandbox=on\n" >"$HOME/sandbox-state"
+else
+  [[ -e /var/tmp/yeet-smoke-sandbox-hidden ]]
+  printf "sandbox=off\n" >"$HOME/sandbox-state"
+fi
+
+printf "data=ok\n" >>"$HOME/sandbox-state"
+while true; do sleep 30; done
+EOF
+chmod +x yeet-smoke-sandbox.sh
+```
+
+Run it with one remapped read-only file and one remapped writable directory:
+
+```bash
+yeet run yeet-smoke-sandbox ./yeet-smoke-sandbox.sh \
+  --sandbox-ro=/tmp/yeet-smoke-sandbox-ro.txt:/proof/input.txt \
+  --sandbox-rw=/tmp/yeet-smoke-sandbox-rw:/cache
+yeet status yeet-smoke-sandbox
+yeet info yeet-smoke-sandbox
+yeet ssh yeet-smoke-sandbox -- cat sandbox-state
+yeet ssh -- cat /tmp/yeet-smoke-sandbox-rw/from-sandbox.txt
+yeet ssh -- cat /tmp/yeet-smoke-sandbox-ro.txt
+```
+
+`yeet info` should report sandbox state `on`. The service data report should
+contain `sandbox=on` and `data=ok`; the writable host directory should contain
+`writable-proof`; and the read-only source should still contain only
+`read-only-proof`. The script writes its success marker only after confirming
+that the host sentinel is hidden.
+
+Now select direct execution explicitly and verify the reported state:
+
+```bash
+yeet service set yeet-smoke-sandbox --sandbox=off
+yeet info yeet-smoke-sandbox
+yeet ssh yeet-smoke-sandbox -- cat sandbox-state
+```
+
+The report should now contain `sandbox=off` and `data=ok`. The restarted direct
+process sees the host sentinel and no longer receives the dormant exposures.
+
+The service still uses the shared `yeet-svc` account by default. Exercise an
+explicit identity migration in both directions while sandbox state remains an
+independent setting:
+
+```bash
+yeet ssh yeet-smoke-sandbox -- id
+yeet service set yeet-smoke-sandbox --run-as=root
+yeet service set yeet-smoke-sandbox --run-as=yeet-svc
+```
+
+Remove every disposable service, host fixture, and local payload:
+
+```bash
+yeet rm --clean yeet-smoke-sandbox
+yeet ssh -- rm -f \
+  /tmp/yeet-smoke-sandbox-ro.txt \
+  /var/tmp/yeet-smoke-sandbox-hidden
+yeet ssh -- rm -rf /tmp/yeet-smoke-sandbox-rw
+rm yeet-smoke-sandbox.sh
+```
+
+Each sandbox or identity change uses a rollback-safe service replacement. If
+this fails while Docker payloads work, inspect the unit and then use the native
+sandbox troubleshooting checks:
+
+```bash
+yeet ssh -- systemctl status yeet-smoke-sandbox.service
+```
+
+See
+[Native sandbox activation fails](/docs/operations/troubleshooting#native-sandbox-activation-fails).
+
+## 4) Smoke-test a scheduled job
+
+Scheduled native jobs use systemd timers. This validates timer creation and
+one scheduled run.
+
+```bash
+cat > yeet-smoke-cron.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+date
+EOF
+chmod +x yeet-smoke-cron.sh
+
+yeet run yeet-smoke-cron ./yeet-smoke-cron.sh --cron="* * * * *"
+yeet status yeet-smoke-cron
+sleep 70
+yeet logs yeet-smoke-cron
+yeet rm --clean yeet-smoke-cron
+rm yeet-smoke-cron.sh
+```
+
+Fresh scheduled jobs use the same native sandbox default. A later
+`yeet service set yeet-smoke-cron --sandbox=on|off` replaces and verifies the
+service and timer units without invoking the job payload as a migration test.
+The minute wait above is the deliberate execution proof; changing sandbox
+policy is not another run.
+
+## 5) Check VM capability before creating a VM
+
+VM payloads require x86_64 Linux, KVM, TUN/TAP, and a few host filesystem and
+networking tools. Many VPS providers do not expose nested virtualization; that
+is a host limitation, not a failed yeet install.
+
+```bash
+yeet ssh -- sh -lc '
+test -e /dev/kvm && echo kvm=yes || echo kvm=no
+test -e /dev/net/tun && echo tun=yes || echo tun=no
+for c in qemu-img zstd e2fsck resize2fs mount umount ip; do
+  command -v "$c" >/dev/null && echo "$c=yes" || echo "$c=no"
+done
+'
+```
+
+If the VM devices exist but tools are missing on a Debian/Ubuntu host,
+interactive `yeet init` can ask before installing them. You can also install
+the packages listed in [VMs](/docs/payloads/vms#host-requirements).
+
+On a VM-capable Debian/Ubuntu host, interactive `yeet init` can also ask to
+prepare VM LAN bridge support. Say yes when you plan to run VMs with
+`--net=lan`. Say no to defer it; the first VM LAN create prompts again before
+it creates the VM service.
+
+If KVM and TUN/TAP are available and the required tools are present, create a
+disposable VM:
+
+```bash
+yeet vm images catalog
+yeet run yeet-smoke-vm vm://ubuntu/26.04
+yeet ssh yeet-smoke-vm -- uname -a
+yeet rm --clean yeet-smoke-vm
+```
+
+To verify the NixOS image family too, run the same smoke check with
+`vm://nixos/26.05`.
+
+If KVM is missing, use containers, binaries, scripts, and cron jobs on this
+host, and run VM payloads on a KVM-capable machine. See [VMs](/docs/payloads/vms).
+
+## 6) Check optional host features only when needed
+
+LAN networking requires a host attached to a network where macvlan and DHCP
+make sense. A WAN-only VPS usually should skip this check. LAN services use
+the LAN or VLAN gateway for outbound internet.
+
+```bash
+yeet run yeet-smoke-lan nginx:alpine --net=lan
+yeet ip yeet-smoke-lan
+yeet rm --clean yeet-smoke-lan
+```
+
+For VM LAN networking, run the same idea with a disposable VM:
+
+```bash
+yeet run yeet-smoke-vm-lan vm://ubuntu/26.04 --net=lan
+yeet ip yeet-smoke-vm-lan
+yeet rm --clean yeet-smoke-vm-lan
+```
+
+If the host needs a bridge, yeet prompts before creating the VM. Applying the
+bridge can briefly interrupt host networking. If the command disconnects during
+that step, wait for the host to come back and rerun the same command.
+
+ZFS-backed service roots require an existing parent dataset. Skip this if you
+do not plan to use ZFS. Optional storage checks are useful only when they match
+the storage you are actually going to operate.
+
+ZFS datasets are not copied or deleted implicitly. Use ZFS tools to confirm a
+custom or nested dataset remains mounted at the path you selected before and
+after any Catch upgrade.
+
+```bash
+yeet run yeet-smoke-zfs nginx:alpine --service-root=tank/apps/yeet-smoke-zfs --zfs
+yeet rm --clean yeet-smoke-zfs
+```
+
+See [Networking](/docs/concepts/networking) and [ZFS](/docs/concepts/zfs) for
+the full model. Use `svc,ts` instead of plain `ts` when a service needs both a
+Tailscale identity and normal outbound internet through the catch host.
+
+## Cleanup check
+
+After the smoke tests, `yeet status` should not list the disposable services:
+
+```bash
+yeet status
+```
+
+If a service removal fails, rerun the remove command and then inspect
+[Troubleshooting](/docs/operations/troubleshooting) for the relevant payload
+type.

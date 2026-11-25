@@ -1,0 +1,1409 @@
+// Copyright (c) 2025 AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package catch
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"slices"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+
+	"github.com/yeetrun/yeet/pkg/cli"
+	"github.com/yeetrun/yeet/pkg/cmdutil"
+	"github.com/yeetrun/yeet/pkg/db"
+	"github.com/yeetrun/yeet/pkg/iso"
+	"github.com/yeetrun/yeet/pkg/svc"
+)
+
+var errUnhandledServiceType = errors.New("unhandled service type")
+
+var ensureVMNetworkForServiceAction = (*Server).ensureVMNetworkLocked
+
+func (e *ttyExecer) startCmdFunc() error {
+	if e.sn == SystemService || e.sn == CatchService {
+		return fmt.Errorf("cannot start system service")
+	}
+	target := e.managedTargetLabel()
+	return e.withLockedServiceActivationMutation(func() error {
+		return e.runAction("start", "Start "+target, func() error {
+			return e.startManagedService(target)
+		})
+	})
+}
+
+func (e *ttyExecer) startManagedService(target string) error {
+	if err := e.preflightISOActivationState(); err != nil {
+		return fmt.Errorf("failed to start %s: %w", target, err)
+	}
+	if handled, err := e.activateISOVM(func(runner ServiceRunner) error {
+		return runner.Start()
+	}); handled {
+		if err != nil {
+			return fmt.Errorf("failed to start %s: %w", target, err)
+		}
+		return nil
+	}
+	if err := e.preflightActiveSandboxGeneration(); err != nil {
+		return fmt.Errorf("failed to start %s: %w", target, err)
+	}
+	return e.withTailscaleResolverReadyForActivation(func() error {
+		if handled, err := e.installISOServiceIfAllocated(); handled {
+			if err != nil {
+				return fmt.Errorf("failed to start %s: %w", target, err)
+			}
+			return nil
+		}
+		runner, err := e.serviceRunner()
+		if err != nil {
+			return fmt.Errorf("failed to get service runner: %w", err)
+		}
+		if err := runner.Start(); err != nil {
+			return fmt.Errorf("failed to start %s: %w", target, err)
+		}
+		return nil
+	})
+}
+
+func (e *ttyExecer) withTailscaleResolverReadyForActivation(operation func() error) error {
+	if e.s == nil {
+		return operation()
+	}
+	return e.s.withTailscaleResolverReadyForActivation(e.ctx, e.sn, operation)
+}
+
+func (e *ttyExecer) withLockedServiceMutation(operation func() error) error {
+	return e.withLockedServiceMutationCheck(
+		func() error { return e.s.checkServiceIdentityMutationAllowed(e.sn) },
+		operation,
+	)
+}
+
+func (e *ttyExecer) withLockedServiceActivationMutation(operation func() error) error {
+	return e.withLockedServiceMutationCheck(e.checkServiceActivationMutationAllowed, operation)
+}
+
+func (e *ttyExecer) checkServiceActivationMutationAllowed() error {
+	if err := e.s.checkServiceIdentityRecoveryMutationAllowed(e.sn); err != nil {
+		return err
+	}
+	service, err := e.s.serviceView(e.sn)
+	if err != nil {
+		return err
+	}
+	record := service.AsStruct()
+	if !tailscaleResolverPersistedRecord(*record) &&
+		record.ServiceType == db.ServiceTypeVM &&
+		record.ISO != nil {
+		return nil
+	}
+	return e.s.checkTailscaleResolverMutationAllowed()
+}
+
+func (e *ttyExecer) withLockedServiceMutationCheck(check func() error, operation func() error) error {
+	if e.s == nil {
+		return operation()
+	}
+	if e.serviceOperationLockHeld {
+		if err := check(); err != nil {
+			return err
+		}
+		return operation()
+	}
+	release := e.s.serviceOperationLocks.Lock(e.sn)
+	defer release()
+	e.serviceOperationLockHeld = true
+	defer func() { e.serviceOperationLockHeld = false }()
+	if err := check(); err != nil {
+		return err
+	}
+	return operation()
+}
+
+func (e *ttyExecer) stopCmdFunc() error {
+	if e.sn == SystemService || e.sn == CatchService {
+		return fmt.Errorf("cannot stop system service")
+	}
+	target := e.managedTargetLabel()
+	return e.withLockedServiceMutation(func() error {
+		return e.runAction("stop", "Stop "+target, func() error {
+			runner, err := e.serviceRunner()
+			if err != nil {
+				return fmt.Errorf("failed to get service runner: %w", err)
+			}
+			if err := runner.Stop(); err != nil {
+				return fmt.Errorf("failed to stop %s: %w", target, err)
+			}
+			if e.s != nil {
+				if err := e.s.markISOStoppedIfAllocated(e.sn); err != nil {
+					return fmt.Errorf("record stopped iso state for %s: %w", target, err)
+				}
+			}
+			return nil
+		})
+	})
+}
+
+const vmGenerationRollbackUnsupportedMessage = "VM services do not support generation rollback; use yeet snapshots restore for VM disk recovery"
+
+type serviceGenerationView struct {
+	Service           string `json:"service"`
+	Type              string `json:"type"`
+	CurrentGeneration int    `json:"currentGeneration"`
+	LatestGeneration  int    `json:"latestGeneration"`
+	RollbackSupported bool   `json:"rollbackSupported"`
+}
+
+func (e *ttyExecer) rollbackCmdFunc(serviceName string) error {
+	ui := e.newProgressUI("rollback")
+	ui.Start()
+	defer ui.Stop()
+
+	return e.withLockedServiceMutation(func() error {
+		ui.StartStep("Select generation")
+		service, gen, err := e.rollbackGeneration(serviceName)
+		if err != nil {
+			ui.FailStep(err.Error())
+			return fmt.Errorf("failed to rollback service: %w", err)
+		}
+		ui.DoneStep(fmt.Sprintf("generation=%d", gen))
+
+		if err := e.preflightSandboxGenerationActivation(service, gen); err != nil {
+			return fmt.Errorf("failed to preflight rollback generation %d: %w", gen, err)
+		}
+		if err := serviceSandboxMutationContext(e.ctx); err != nil {
+			return err
+		}
+		return e.installRollbackGeneration(ui, serviceName, service.Generation, gen)
+	})
+}
+
+func (e *ttyExecer) rollbackGeneration(serviceName string) (*db.Service, int, error) {
+	serviceView, err := e.s.serviceView(serviceName)
+	if err != nil {
+		return nil, 0, err
+	}
+	service := serviceView.AsStruct()
+	if service.ServiceType == db.ServiceTypeVM {
+		return nil, 0, errors.New(vmGenerationRollbackUnsupportedMessage)
+	}
+	target := service.Clone()
+	if err := selectPreviousGeneration(target); err != nil {
+		return nil, 0, err
+	}
+	return service, target.Generation, nil
+}
+
+func selectPreviousGeneration(s *db.Service) error {
+	if s.Generation == 0 {
+		return fmt.Errorf("no generation to rollback")
+	}
+	minG := s.LatestGeneration - maxGenerations
+	gen := s.Generation - 1
+	if gen < minG {
+		return fmt.Errorf("generation %d is too old, earliest rollback is %d", gen, minG)
+	}
+	if gen == 0 {
+		return fmt.Errorf("generation %d is the oldest, cannot rollback", s.Generation)
+	}
+	if _, currentScheduled := s.Artifacts.Gen(db.ArtifactSystemdTimerFile, s.Generation); currentScheduled {
+		if _, targetScheduled := s.Artifacts.Gen(db.ArtifactSystemdTimerFile, gen); !targetScheduled {
+			return errors.New(scheduledNativeOnlyMessage)
+		}
+	}
+	s.Generation = gen
+	return nil
+}
+
+func (e *ttyExecer) preflightActiveSandboxGeneration() error {
+	if e.s == nil {
+		return nil
+	}
+	serviceView, err := e.s.serviceView(e.sn)
+	if err != nil {
+		return err
+	}
+	service := serviceView.AsStruct()
+	if service.ServiceType != db.ServiceTypeSystemd {
+		return nil
+	}
+	return e.preflightSandboxGenerationActivation(service, service.Generation)
+}
+
+func (e *ttyExecer) preflightSandboxGenerationActivation(service *db.Service, generation int) error {
+	if e.preflightSandboxGenerationActivationFunc != nil {
+		return e.preflightSandboxGenerationActivationFunc(e.ctx, service, generation)
+	}
+	return e.s.preflightSandboxGenerationActivation(e.ctx, service, generation)
+}
+
+func (s *Server) preflightSandboxGenerationActivation(ctx context.Context, service *db.Service, generation int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	eligible, err := validateSandboxGenerationActivationRequest(ctx, service, generation)
+	if err != nil {
+		return err
+	}
+	if !eligible {
+		return nil
+	}
+	target, err := s.loadSandboxGenerationActivationTarget(service, generation)
+	if err != nil {
+		return err
+	}
+	if target.policy.State == "legacy" {
+		return preflightLegacySandboxGenerationActivation(ctx, service, generation, target)
+	}
+	return s.preflightCanonicalSandboxGenerationActivation(ctx, service, generation, target)
+}
+
+func preflightLegacySandboxGenerationActivation(
+	ctx context.Context,
+	service *db.Service,
+	generation int,
+	target sandboxGenerationActivationTarget,
+) error {
+	if err := verifyStagedServiceSandboxMutation(ctx, service.Name, target.unitPath, nil, target.identity, false); err != nil {
+		return fmt.Errorf("verify service %q generation %d sandbox activation: %w", service.Name, generation, err)
+	}
+	return serviceSandboxMutationContext(ctx)
+}
+
+func (s *Server) preflightCanonicalSandboxGenerationActivation(
+	ctx context.Context,
+	service *db.Service,
+	generation int,
+	target sandboxGenerationActivationTarget,
+) error {
+	validatedPolicy, plan, err := prepareSandboxGenerationActivationPolicy(ctx, service, generation, target)
+	if err != nil {
+		return err
+	}
+	if err := serviceSandboxMutationContext(ctx); err != nil {
+		return err
+	}
+	rendered, renderedPlan, err := renderNativeSandboxUnitWithPlan(string(target.raw), nativeSandboxUnitRequest{
+		CurrentPolicy: target.policy, TargetPolicy: validatedPolicy, Identity: target.identity.Persisted,
+		Payload: target.payload, DataDir: target.request.DataDir, Resolver: target.resolver, Hostname: service.Name,
+	}, plan)
+	if err != nil {
+		return fmt.Errorf("rebuild service %q generation %d sandbox unit: %w", service.Name, generation, err)
+	}
+	if rendered != string(target.raw) {
+		return fmt.Errorf("service %q generation %d sandbox unit does not match its exact policy and artifacts", service.Name, generation)
+	}
+	if err := verifyStagedServiceSandboxMutation(ctx, service.Name, target.unitPath, renderedPlan, target.identity, target.policy.State == "on"); err != nil {
+		return fmt.Errorf("verify service %q generation %d sandbox activation: %w", service.Name, generation, err)
+	}
+	return serviceSandboxMutationContext(ctx)
+}
+
+func validateSandboxGenerationActivationRequest(ctx context.Context, service *db.Service, generation int) (bool, error) {
+	if err := serviceSandboxMutationContext(ctx); err != nil {
+		return false, err
+	}
+	if service == nil {
+		return false, errors.New("sandbox generation activation requires a service")
+	}
+	if service.ServiceType != db.ServiceTypeSystemd {
+		return false, nil
+	}
+	if generation <= 0 {
+		return false, fmt.Errorf("service %q sandbox activation generation %d is invalid", service.Name, generation)
+	}
+	return true, nil
+}
+
+type sandboxGenerationActivationTarget struct {
+	policy   serviceSandboxPolicy
+	unitPath string
+	payload  string
+	resolver string
+	raw      []byte
+	identity resolvedServiceIdentity
+	request  serviceSandboxPlanRequest
+}
+
+type sandboxGenerationActivationArtifact struct {
+	name string
+	path string
+}
+
+func (s *Server) loadSandboxGenerationActivationTarget(service *db.Service, generation int) (sandboxGenerationActivationTarget, error) {
+	policy, err := serviceSandboxPolicyForExactGeneration(service, generation)
+	if err != nil {
+		return sandboxGenerationActivationTarget{}, fmt.Errorf("load service %q generation %d sandbox policy: %w", service.Name, generation, err)
+	}
+	unitPath, err := exactServiceSandboxActivationArtifact(service, db.ArtifactSystemdUnit, generation)
+	if err != nil {
+		return sandboxGenerationActivationTarget{}, err
+	}
+	payload, err := exactServiceSandboxActivationArtifact(service, db.ArtifactBinary, generation)
+	if err != nil {
+		return sandboxGenerationActivationTarget{}, err
+	}
+	resolver := "/etc/resolv.conf"
+	if policy.State != "legacy" {
+		resolver, err = exactServiceSandboxResolver(service, generation)
+		if err != nil {
+			return sandboxGenerationActivationTarget{}, err
+		}
+	}
+	paths := []sandboxGenerationActivationArtifact{
+		{name: "systemd unit", path: unitPath},
+		{name: "payload", path: payload},
+	}
+	if policy.State != "legacy" {
+		if _, exists := service.Artifacts[db.ArtifactNetNSResolv]; exists {
+			paths = append(paths, sandboxGenerationActivationArtifact{name: "resolver", path: resolver})
+		}
+	}
+	if err := validateSandboxGenerationActivationArtifacts(service, generation, paths); err != nil {
+		return sandboxGenerationActivationTarget{}, err
+	}
+	raw, err := os.ReadFile(unitPath)
+	if err != nil {
+		return sandboxGenerationActivationTarget{}, fmt.Errorf("read service %q generation %d systemd unit: %w", service.Name, generation, err)
+	}
+	identity := effectiveServiceIdentity(service.View())
+	request := serviceSandboxPlanRequest{
+		Service: service.Name, Policy: policy, Payload: payload,
+		DataDir: serviceDataDirForRoot(serviceRootFromConfig(s.cfg, *service)), ResolverSource: resolver,
+		UID: identity.Persisted.UID, GID: identity.Persisted.GID, Hostname: service.Name,
+	}
+	return sandboxGenerationActivationTarget{
+		policy: policy, unitPath: unitPath, payload: payload, resolver: resolver,
+		raw: raw, identity: identity, request: request,
+	}, nil
+}
+
+func validateSandboxGenerationActivationArtifacts(
+	service *db.Service,
+	generation int,
+	artifacts []sandboxGenerationActivationArtifact,
+) error {
+	for _, artifact := range artifacts {
+		if err := validateReadableServiceSandboxArtifact(artifact.path); err != nil {
+			return fmt.Errorf("validate service %q generation %d %s artifact: %w", service.Name, generation, artifact.name, err)
+		}
+	}
+	return nil
+}
+
+func prepareSandboxGenerationActivationPolicy(
+	ctx context.Context,
+	service *db.Service,
+	generation int,
+	target sandboxGenerationActivationTarget,
+) (serviceSandboxPolicy, *serviceSandboxPlan, error) {
+	if target.policy.State == "legacy" {
+		return target.policy, nil, nil
+	}
+	validatedPolicy, plan, err := prepareServiceSandboxMutationTarget(
+		ctx, service.Name, target.request, target.policy.State == "on",
+	)
+	if err != nil {
+		return serviceSandboxPolicy{}, nil, fmt.Errorf("preflight service %q generation %d sandbox: %w", service.Name, generation, err)
+	}
+	return validatedPolicy, plan, nil
+}
+
+func exactServiceSandboxActivationArtifact(service *db.Service, name db.ArtifactName, generation int) (string, error) {
+	artifact, exists := service.Artifacts[name]
+	if !exists || artifact == nil || artifact.Refs == nil {
+		return "", fmt.Errorf("service %q generation %d has an invalid exact %s artifact record", service.Name, generation, name)
+	}
+	path, ok := artifact.Refs[db.Gen(generation)]
+	if !ok || strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("service %q generation %d has no exact %s artifact", service.Name, generation, name)
+	}
+	return path, nil
+}
+
+func (e *ttyExecer) installRollbackGeneration(ui *runUI, serviceName string, expected, gen int) error {
+	ui.StartStep("Install generation")
+	cfg := e.installerCfg()
+	cfg.ServiceName = serviceName
+	if err := e.installServiceGenerationIfCurrent(cfg, expected, gen); err != nil {
+		ui.FailStep(err.Error())
+		return err
+	}
+	ui.DoneStep(fmt.Sprintf("generation=%d", gen))
+	return nil
+}
+
+func (e *ttyExecer) serviceGenerationsCmdFunc(serviceName string, flags cli.ServiceGenerationsFlags) error {
+	sv, err := e.s.serviceView(serviceName)
+	if err != nil {
+		return err
+	}
+	return renderServiceGenerationView(e.rw, flags.Format, serviceGenerationViewFromService(sv))
+}
+
+func serviceGenerationViewFromService(sv db.ServiceView) serviceGenerationView {
+	serviceType := sv.ServiceType()
+	return serviceGenerationView{
+		Service:           sv.Name(),
+		Type:              string(serviceType),
+		CurrentGeneration: sv.Generation(),
+		LatestGeneration:  sv.LatestGeneration(),
+		RollbackSupported: serviceType != db.ServiceTypeVM,
+	}
+}
+
+func renderServiceGenerationView(w io.Writer, formatOut string, view serviceGenerationView) error {
+	if formatOut == "json" {
+		return json.NewEncoder(w).Encode(view)
+	}
+	if formatOut == "json-pretty" {
+		encoder := json.NewEncoder(w)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(view)
+	}
+	return renderServiceGenerationTable(w, view)
+}
+
+func renderServiceGenerationTable(w io.Writer, view serviceGenerationView) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "SERVICE\tTYPE\tCURRENT\tLATEST\tROLLBACK"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%t\n",
+		view.Service,
+		view.Type,
+		view.CurrentGeneration,
+		view.LatestGeneration,
+		view.RollbackSupported,
+	); err != nil {
+		return err
+	}
+	return tw.Flush()
+}
+
+func (e *ttyExecer) installService(cfg InstallerCfg) error {
+	if e.serviceInstallFunc != nil {
+		return e.serviceInstallFunc(cfg)
+	}
+	i, err := e.s.NewInstaller(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create installer: %w", err)
+	}
+	i.NewCmd = e.newCmd
+	return i.Install()
+}
+
+func (e *ttyExecer) installServiceGeneration(cfg InstallerCfg, gen int) error {
+	if e.serviceInstallGenFunc != nil {
+		return e.serviceInstallGenFunc(cfg, gen)
+	}
+	i, err := e.s.NewInstaller(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create installer: %w", err)
+	}
+	i.NewCmd = e.newCmd
+	return i.InstallGen(gen)
+}
+
+func (e *ttyExecer) installServiceGenerationIfCurrent(cfg InstallerCfg, expected, gen int) error {
+	if e.serviceInstallGenFunc != nil {
+		if _, _, err := e.s.cfg.DB.MutateService(cfg.ServiceName, func(_ *db.Data, service *db.Service) error {
+			if service.Generation != expected {
+				return fmt.Errorf("service generation changed from expected %d to %d", expected, service.Generation)
+			}
+			service.Generation = gen
+			return nil
+		}); err != nil {
+			return err
+		}
+		return e.serviceInstallGenFunc(cfg, gen)
+	}
+	i, err := e.s.NewInstaller(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create installer: %w", err)
+	}
+	i.NewCmd = e.newCmd
+	return i.InstallGenIfCurrent(expected, gen)
+}
+
+func (e *ttyExecer) restartCmdFunc() error {
+	target := e.managedTargetLabel()
+	return e.withLockedServiceActivationMutation(func() error {
+		return e.runAction("restart", "Restart "+target, func() error {
+			if err := e.preflightISOActivationState(); err != nil {
+				return fmt.Errorf("failed to restart %s: %w", target, err)
+			}
+			if handled, err := e.activateISOVM(func(runner ServiceRunner) error {
+				return runner.Restart()
+			}); handled {
+				if err != nil {
+					return fmt.Errorf("failed to restart %s: %w", target, err)
+				}
+				return nil
+			}
+			if err := e.preflightActiveSandboxGeneration(); err != nil {
+				return fmt.Errorf("failed to restart %s: %w", target, err)
+			}
+			return e.withTailscaleResolverReadyForActivation(func() error {
+				if handled, err := e.installISOServiceIfAllocated(); handled {
+					if err != nil {
+						return fmt.Errorf("failed to restart %s: %w", target, err)
+					}
+					return nil
+				}
+				runner, err := e.serviceRunner()
+				if err != nil {
+					return fmt.Errorf("failed to get service runner: %w", err)
+				}
+				if err := runner.Restart(); err != nil {
+					return fmt.Errorf("failed to restart %s: %w", target, err)
+				}
+				return nil
+			})
+		})
+	})
+}
+
+func (e *ttyExecer) preflightISOActivationState() error {
+	if e.s == nil {
+		return nil
+	}
+	service, err := e.s.serviceView(e.sn)
+	if err != nil {
+		return fmt.Errorf("load service network state: %w", err)
+	}
+	record := service.AsStruct()
+	allocation := record.ISO
+	if record.ServiceType != db.ServiceTypeSystemd || allocation == nil || allocation.Kind != string(iso.PayloadNative) {
+		return nil
+	}
+	if iso.AllocationState(allocation.State) != iso.StateQuarantined {
+		return nil
+	}
+	diagnostic := strings.TrimSpace(allocation.LastError)
+	if diagnostic == "" {
+		diagnostic = "no diagnostic was recorded"
+	}
+	return fmt.Errorf("service %q iso allocation is quarantined: %s; manual Catch-host recovery is required after correcting the isolation failure", e.sn, diagnostic)
+}
+
+func (e *ttyExecer) activateISOVM(activate func(ServiceRunner) error) (bool, error) {
+	if e.s == nil {
+		return false, nil
+	}
+	service, err := e.s.serviceView(e.sn)
+	if err != nil {
+		return true, fmt.Errorf("load service network state: %w", err)
+	}
+	record := service.AsStruct()
+	if record.ISO == nil || record.ServiceType != db.ServiceTypeVM {
+		return false, nil
+	}
+	transaction := e.vmRuntimeTransactionFunc
+	if transaction == nil {
+		transaction = WithVMRuntimeTransactionLock
+	}
+	releaseResolver := func() {}
+	defer func() { releaseResolver() }()
+	if err := transaction(e.ctx, &e.s.cfg, func() error {
+		release, err := e.s.lockTailscaleResolverReadyForActivation(e.ctx, e.sn)
+		if err != nil {
+			return err
+		}
+		releaseResolver = release
+		if err := ensureVMNetworkForServiceAction(e.s, e.ctx, e.sn); err != nil {
+			releaseResolver()
+			releaseResolver = func() {}
+			return err
+		}
+		return nil
+	}); err != nil {
+		return true, err
+	}
+	runner, err := e.serviceRunner()
+	if err != nil {
+		return true, fmt.Errorf("failed to get service runner: %w", err)
+	}
+	return true, activate(runner)
+}
+
+func (e *ttyExecer) installISOServiceIfAllocated() (bool, error) {
+	if e.s == nil {
+		return false, nil
+	}
+	service, err := e.s.serviceView(e.sn)
+	if err != nil {
+		return true, fmt.Errorf("load service network state: %w", err)
+	}
+	record := service.AsStruct()
+	if record.ISO == nil {
+		return false, nil
+	}
+	if record.ServiceType == db.ServiceTypeVM {
+		if err := ensureVMNetworkForServiceAction(e.s, e.ctx, e.sn); err != nil {
+			return true, err
+		}
+		return false, nil
+	}
+	return true, e.installServiceGeneration(e.installerCfg(), record.Generation)
+}
+
+func (e *ttyExecer) enableCmdFunc() error {
+	if e.sn == SystemService || e.sn == CatchService {
+		return fmt.Errorf("cannot install, reserved service name")
+	}
+	return e.withLockedServiceMutation(func() error {
+		return e.withTailscaleResolverReadyForActivation(func() error {
+			runner, err := e.serviceRunner()
+			if err != nil {
+				return err
+			}
+			enabler, ok := runner.(ServiceEnabler)
+			if !ok {
+				return fmt.Errorf("service does not support enable")
+			}
+			return enabler.Enable()
+		})
+	})
+}
+
+func (e *ttyExecer) disableCmdFunc() error {
+	if e.sn == SystemService || e.sn == CatchService {
+		return fmt.Errorf("cannot disable system service")
+	}
+
+	return e.withLockedServiceMutation(func() error {
+		runner, err := e.serviceRunner()
+		if err != nil {
+			return err
+		}
+		enabler, ok := runner.(ServiceEnabler)
+		if !ok {
+			return fmt.Errorf("service does not support disable")
+		}
+		return enabler.Disable()
+	})
+}
+
+func (e *ttyExecer) logsCmdFunc(flags cli.LogsFlags) error {
+	// We don't support logs on the system service.
+	if e.sn == SystemService {
+		return fmt.Errorf("cannot show logs for system service")
+	}
+	// TODO(shayne): Make tailing optional
+	runner, err := e.serviceRunner()
+	if err != nil {
+		return fmt.Errorf("failed to get service runner: %w", err)
+	}
+	return runner.Logs(&svc.LogOptions{Follow: flags.Follow, Lines: flags.Lines})
+}
+
+func (e *ttyExecer) statusCmdFunc(flags cli.StatusFlags) error {
+	if err := e.ensureServicesAvailable(); err != nil {
+		return err
+	}
+	statuses, render, err := e.statusData()
+	if err != nil {
+		return err
+	}
+	if !render {
+		return nil
+	}
+	sortServiceStatuses(statuses)
+	return renderServiceStatuses(e.rw, flags.Format, statuses)
+}
+
+func (e *ttyExecer) ensureServicesAvailable() error {
+	dv, err := e.s.cfg.DB.Get()
+	if err != nil {
+		return fmt.Errorf("failed to get services: %w", err)
+	}
+	if !dv.Valid() {
+		return fmt.Errorf("no services found")
+	}
+	return nil
+}
+
+func (e *ttyExecer) statusData() ([]ServiceStatusData, bool, error) {
+	if e.sn == SystemService {
+		statuses, err := e.systemStatusData()
+		return statuses, true, err
+	}
+	status, render, err := e.singleServiceStatusData()
+	if err != nil {
+		return nil, false, err
+	}
+	return []ServiceStatusData{status}, render, nil
+}
+
+func (e *ttyExecer) systemStatusData() ([]ServiceStatusData, error) {
+	if e.hasLegacyStatusHooks() {
+		return e.legacySystemStatusData()
+	}
+	if e.s == nil {
+		return nil, fmt.Errorf("status snapshot server is nil")
+	}
+	ctx := e.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return e.s.collectStatusSnapshot(ctx, newStatusSnapshotCommand)
+}
+
+func (e *ttyExecer) hasLegacyStatusHooks() bool {
+	return e.systemdStatusFunc != nil ||
+		e.systemdStatusesFunc != nil ||
+		e.dockerComposeStatusFunc != nil ||
+		e.dockerComposeStatusesFunc != nil
+}
+
+func (e *ttyExecer) legacySystemStatusData() ([]ServiceStatusData, error) {
+	statuses, err := e.systemdStatusData()
+	if err != nil {
+		return nil, err
+	}
+	composeStatuses, err := e.dockerComposeStatusData()
+	if err != nil {
+		return nil, err
+	}
+	vmStatuses, err := e.vmStatusData()
+	if err != nil {
+		return nil, err
+	}
+	statuses = append(statuses, composeStatuses...)
+	return append(statuses, vmStatuses...), nil
+}
+
+func (e *ttyExecer) systemdStatusData() ([]ServiceStatusData, error) {
+	systemdStatuses, err := e.systemdStatuses()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get systemd statuses: %w", err)
+	}
+	statuses := make([]ServiceStatusData, 0, len(systemdStatuses))
+	for sn, status := range systemdStatuses {
+		data, err := e.systemdServiceStatusData(sn, status)
+		if err != nil {
+			return nil, err
+		}
+		statuses = append(statuses, data)
+	}
+	return statuses, nil
+}
+
+func (e *ttyExecer) systemdServiceStatusData(sn string, status svc.Status) (ServiceStatusData, error) {
+	service, err := e.s.serviceView(sn)
+	if err != nil {
+		return ServiceStatusData{}, err
+	}
+	return serviceStatusWithComponent(sn, ServiceDataTypeForService(service), sn, status), nil
+}
+
+func (e *ttyExecer) dockerComposeStatusData() ([]ServiceStatusData, error) {
+	composeStatuses, err := e.dockerComposeStatuses()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all docker compose statuses: %w", err)
+	}
+	statuses := make([]ServiceStatusData, 0, len(composeStatuses))
+	for sn, status := range composeStatuses {
+		statuses = append(statuses, composeServiceStatusData(sn, e.serviceDataTypeOrDocker(sn), status))
+	}
+	return statuses, nil
+}
+
+func (e *ttyExecer) vmStatusData() ([]ServiceStatusData, error) {
+	dv, err := e.s.getDB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM services: %w", err)
+	}
+	names := serviceNamesByType(dv.AsStruct().Services, db.ServiceTypeVM)
+	statuses := make([]ServiceStatusData, 0, len(names))
+	for _, sn := range names {
+		status, err := e.vmStatus(sn)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get VM status for %s: %w", sn, err)
+		}
+		statuses = append(statuses, serviceStatusWithComponent(sn, ServiceDataTypeVM, sn, status))
+	}
+	return statuses, nil
+}
+
+func (e *ttyExecer) serviceDataTypeOrDocker(sn string) ServiceDataType {
+	if service, err := e.s.serviceView(sn); err == nil {
+		return ServiceDataTypeForService(service)
+	}
+	return ServiceDataTypeDocker
+}
+
+func (e *ttyExecer) singleServiceStatusData() (ServiceStatusData, bool, error) {
+	service, err := e.s.serviceView(e.sn)
+	if err != nil {
+		return ServiceStatusData{}, false, fmt.Errorf("failed to get service type: %w", err)
+	}
+	data := serviceStatusData(e.sn, ServiceDataTypeForService(service))
+	return e.populateSingleServiceStatus(data, service.ServiceType())
+}
+
+func (e *ttyExecer) populateSingleServiceStatus(data ServiceStatusData, serviceType db.ServiceType) (ServiceStatusData, bool, error) {
+	switch serviceType {
+	case db.ServiceTypeSystemd:
+		return e.addSingleSystemdStatus(data)
+	case db.ServiceTypeDockerCompose:
+		return e.addSingleDockerComposeStatus(data)
+	case db.ServiceTypeVM:
+		return e.addSingleVMStatus(data)
+	default:
+		return data, true, nil
+	}
+}
+
+func (e *ttyExecer) addSingleSystemdStatus(data ServiceStatusData) (ServiceStatusData, bool, error) {
+	status, err := e.systemdStatus(e.sn)
+	if err != nil {
+		return ServiceStatusData{}, false, fmt.Errorf("failed to get systemd status: %w", err)
+	}
+	data.ComponentStatus = []ComponentStatusData{componentStatusData(e.sn, status)}
+	return data, true, nil
+}
+
+func (e *ttyExecer) addSingleDockerComposeStatus(data ServiceStatusData) (ServiceStatusData, bool, error) {
+	statuses, err := e.dockerComposeStatus(e.sn)
+	if err != nil {
+		return e.handleDockerComposeStatusError(data, err)
+	}
+	if len(statuses) == 0 {
+		data.ComponentStatus = []ComponentStatusData{unknownComponentStatus(e.sn)}
+		return data, false, nil
+	}
+	data.ComponentStatus = componentStatuses(statuses)
+	return data, true, nil
+}
+
+func (e *ttyExecer) addSingleVMStatus(data ServiceStatusData) (ServiceStatusData, bool, error) {
+	status, err := e.vmStatus(e.sn)
+	if err != nil {
+		return ServiceStatusData{}, false, fmt.Errorf("failed to get VM status: %w", err)
+	}
+	data.ComponentStatus = []ComponentStatusData{componentStatusData(e.sn, status)}
+	return data, true, nil
+}
+
+func (e *ttyExecer) handleDockerComposeStatusError(data ServiceStatusData, err error) (ServiceStatusData, bool, error) {
+	if err == svc.ErrDockerStatusUnknown {
+		data.ComponentStatus = []ComponentStatusData{unknownComponentStatus(e.sn)}
+		return data, true, nil
+	}
+	return ServiceStatusData{}, false, fmt.Errorf("failed to get docker compose statuses: %w", err)
+}
+
+func (e *ttyExecer) systemdStatus(sn string) (svc.Status, error) {
+	if e.systemdStatusFunc != nil {
+		return e.systemdStatusFunc(sn)
+	}
+	return e.s.SystemdStatus(sn)
+}
+
+func (e *ttyExecer) vmStatus(sn string) (svc.Status, error) {
+	if e.systemdStatusFunc != nil {
+		return e.systemdStatusFunc(vmSystemdUnitName(sn))
+	}
+	runner := &vmRunner{name: sn}
+	runner.SetNewCmd(e.newCmd)
+	return runner.Status()
+}
+
+func (e *ttyExecer) systemdStatuses() (map[string]svc.Status, error) {
+	if e.systemdStatusesFunc != nil {
+		return e.systemdStatusesFunc()
+	}
+	return e.s.SystemdStatuses()
+}
+
+func (e *ttyExecer) dockerComposeStatus(sn string) (svc.DockerComposeStatus, error) {
+	if e.dockerComposeStatusFunc != nil {
+		return e.dockerComposeStatusFunc(sn)
+	}
+	return e.s.DockerComposeStatus(sn)
+}
+
+func (e *ttyExecer) dockerComposeStatuses() (map[string]svc.DockerComposeStatus, error) {
+	if e.dockerComposeStatusesFunc != nil {
+		return e.dockerComposeStatusesFunc()
+	}
+	return e.s.DockerComposeStatuses()
+}
+
+func serviceStatusData(name string, serviceType ServiceDataType) ServiceStatusData {
+	return ServiceStatusData{
+		ServiceName:     name,
+		ServiceType:     serviceType,
+		ComponentStatus: []ComponentStatusData{},
+	}
+}
+
+func serviceStatusWithComponent(serviceName string, serviceType ServiceDataType, componentName string, status svc.Status) ServiceStatusData {
+	data := serviceStatusData(serviceName, serviceType)
+	data.ComponentStatus = []ComponentStatusData{componentStatusData(componentName, status)}
+	return data
+}
+
+func composeServiceStatusData(serviceName string, serviceType ServiceDataType, statuses svc.DockerComposeStatus) ServiceStatusData {
+	if len(statuses) == 0 {
+		data := serviceStatusData(serviceName, serviceType)
+		data.ComponentStatus = []ComponentStatusData{unknownComponentStatus(serviceName)}
+		return data
+	}
+	data := serviceStatusData(serviceName, serviceType)
+	data.ComponentStatus = componentStatuses(statuses)
+	return data
+}
+
+func componentStatusData(name string, status svc.Status) ComponentStatusData {
+	return ComponentStatusData{
+		Name:   name,
+		Status: ComponentStatusFromServiceStatus(status),
+	}
+}
+
+func unknownComponentStatus(name string) ComponentStatusData {
+	return ComponentStatusData{
+		Name:   name,
+		Status: ComponentStatusUnknown,
+	}
+}
+
+func componentStatuses(statuses svc.DockerComposeStatus) []ComponentStatusData {
+	components := make([]ComponentStatusData, 0, len(statuses))
+	for name, status := range statuses {
+		components = append(components, componentStatusData(name, status))
+	}
+	return components
+}
+
+func sortServiceStatuses(statuses []ServiceStatusData) {
+	slices.SortFunc(statuses, func(a, b ServiceStatusData) int {
+		return strings.Compare(a.ServiceName, b.ServiceName)
+	})
+	for _, status := range statuses {
+		slices.SortFunc(status.ComponentStatus, func(a, b ComponentStatusData) int {
+			return strings.Compare(a.Name, b.Name)
+		})
+	}
+}
+
+func renderServiceStatuses(w io.Writer, formatOut string, statuses []ServiceStatusData) error {
+	if formatOut == "json" {
+		return json.NewEncoder(w).Encode(statuses)
+	}
+	if formatOut == "json-pretty" {
+		encoder := json.NewEncoder(w)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(statuses)
+	}
+	return renderServiceStatusTable(w, statuses)
+}
+
+func renderServiceStatusTable(w io.Writer, statuses []ServiceStatusData) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	if err := writeServiceStatusHeader(tw); err != nil {
+		return err
+	}
+	if err := writeServiceStatusRows(tw, statuses); err != nil {
+		return err
+	}
+	return tw.Flush()
+}
+
+func writeServiceStatusHeader(w io.Writer) error {
+	_, err := fmt.Fprintln(w, "SERVICE\tTYPE\tCONTAINER\tSTATUS\t")
+	return err
+}
+
+func writeServiceStatusRows(w io.Writer, statuses []ServiceStatusData) error {
+	for _, status := range statuses {
+		if err := writeServiceStatusComponents(w, status); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeServiceStatusComponents(w io.Writer, status ServiceStatusData) error {
+	for _, component := range status.ComponentStatus {
+		if err := writeServiceStatusRow(w, status, component); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeServiceStatusRow(w io.Writer, status ServiceStatusData, component ComponentStatusData) error {
+	if status.ServiceType == ServiceDataTypeDocker {
+		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t\n", status.ServiceName, status.ServiceType, component.Name, component.Status)
+		return err
+	}
+	_, err := fmt.Fprintf(w, "%s\t%s\t-\t%s\t\n", status.ServiceName, status.ServiceType, component.Status)
+	return err
+}
+
+func (e *ttyExecer) removeCmdFunc(flags cli.RemoveFlags) error {
+	doneValidate := e.traceBlock("remove validate")
+	if err := e.validateServiceRemoval(); err != nil {
+		doneValidate()
+		return err
+	}
+	doneValidate()
+	return e.withLockedServiceMutation(func() error {
+		return e.removeCmdFuncLocked(flags)
+	})
+}
+
+func (e *ttyExecer) removeCmdFuncLocked(flags cli.RemoveFlags) error {
+	doneRunnerLookup := e.traceBlock("remove service runner")
+	runner, err := e.serviceRunner()
+	doneRunnerLookup()
+	if err != nil {
+		return e.removeServiceWithoutRunner(flags, err)
+	}
+	doneConfirm := e.traceBlock("remove confirm")
+	ok, err := e.confirmServiceRemoval(flags.Yes)
+	doneConfirm()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	doneDataConfirm := e.traceBlock("remove data confirm")
+	flags, err = e.confirmRemoveData(flags)
+	doneDataConfirm()
+	if err != nil {
+		return err
+	}
+
+	return e.removeRunnerAndServiceConfig(runner, flags)
+}
+
+func (e *ttyExecer) serviceHasISOAllocation() bool {
+	if e.s == nil {
+		return false
+	}
+	service, err := e.s.serviceView(e.sn)
+	return err == nil && service.ISO().Valid()
+}
+
+func (e *ttyExecer) validateServiceRemoval() error {
+	if e.sn == SystemService || e.sn == CatchService {
+		return fmt.Errorf("cannot remove system service")
+	}
+	return nil
+}
+
+func (e *ttyExecer) removeServiceWithoutRunner(flags cli.RemoveFlags, err error) error {
+	if !errors.Is(err, errNoServiceConfigured) && !errors.Is(err, errUnhandledServiceType) {
+		return fmt.Errorf("failed to get service runner: %w", err)
+	}
+	runnerErr := err
+	if errors.Is(runnerErr, errUnhandledServiceType) {
+		ok, err := e.confirmServiceRemoval(flags.Yes)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		flags, err = e.confirmRemoveData(flags)
+		if err != nil {
+			return err
+		}
+	}
+	report, err := e.removeServiceWithOptions(RemoveOptions{CleanData: flags.CleanData, Trace: e.tracef})
+	if err != nil {
+		return fmt.Errorf("failed to cleanup %s %q: %w", e.managedTargetLabel(), e.sn, err)
+	}
+	e.printRemoveWarnings(report)
+	if errors.Is(runnerErr, errNoServiceConfigured) {
+		e.printf("service %q not found\n", e.sn)
+	}
+	return nil
+}
+
+func (e *ttyExecer) confirmServiceRemoval(yes bool) (bool, error) {
+	if yes {
+		return true, nil
+	}
+	ok, err := cmdutil.Confirm(e.rw, e.rw, fmt.Sprintf("Are you sure you want to remove %s %q?", e.managedTargetLabel(), e.sn))
+	if err != nil {
+		return false, fmt.Errorf("failed to confirm removal: %w", err)
+	}
+	return ok, nil
+}
+
+func (e *ttyExecer) confirmRemoveData(flags cli.RemoveFlags) (cli.RemoveFlags, error) {
+	if flags.Yes || flags.CleanData {
+		return flags, nil
+	}
+	ok, err := cmdutil.Confirm(e.rw, e.rw, fmt.Sprintf("Delete all data for %s %q?", e.managedTargetLabel(), e.sn))
+	if err != nil {
+		return flags, fmt.Errorf("failed to confirm data removal: %w", err)
+	}
+	if ok {
+		flags.CleanData = true
+	}
+	return flags, nil
+}
+
+func (e *ttyExecer) removeRunner(runner ServiceRunner) error {
+	if err := runner.Remove(); err != nil {
+		if errors.Is(err, svc.ErrNotInstalled) {
+			e.printf("warning: %s %q was not installed\n", e.managedTargetLabel(), e.sn)
+		} else {
+			return fmt.Errorf("failed to stop/remove %s %q (configuration retained for retry): %w", e.managedTargetLabel(), e.sn, err)
+		}
+	}
+	return nil
+}
+
+func (e *ttyExecer) removeRunnerAndServiceConfig(runner ServiceRunner, flags cli.RemoveFlags) error {
+	return WithVMRuntimeTransactionLock(context.Background(), &e.s.cfg, func() error {
+		doneRunnerRemove := e.traceBlock("remove runner")
+		view, viewErr := e.s.serviceView(e.sn)
+		serverRemovesDocker := viewErr == nil && view.ServiceType() == db.ServiceTypeDockerCompose
+		if !e.serviceHasISOAllocation() && !serverRemovesDocker {
+			if err := e.removeRunner(runner); err != nil {
+				doneRunnerRemove()
+				return err
+			}
+		}
+		doneRunnerRemove()
+		opts := RemoveOptions{CleanData: flags.CleanData, Trace: e.tracef}
+		if docker, ok := runner.(*dockerComposeServiceRunner); ok {
+			opts.compose = docker.DockerComposeService
+		}
+		return e.removeServiceConfigLocked(opts)
+	})
+}
+
+func (e *ttyExecer) removeServiceConfigLocked(opts RemoveOptions) error {
+	if e.removeServiceFunc != nil {
+		report, err := e.removeServiceFunc(e.sn, opts)
+		return e.finishRemoveServiceConfig(report, err)
+	}
+	report, err := e.s.removeServiceWithOptionsLocked(e.sn, opts)
+	return e.finishRemoveServiceConfig(report, err)
+}
+
+func (e *ttyExecer) finishRemoveServiceConfig(report *RemoveReport, err error) error {
+	if err != nil {
+		return fmt.Errorf("failed to cleanup %s %q: %w", e.managedTargetLabel(), e.sn, err)
+	}
+	e.printRemoveWarnings(report)
+	return nil
+}
+
+func (e *ttyExecer) removeServiceWithOptions(opts RemoveOptions) (*RemoveReport, error) {
+	if e.removeServiceFunc != nil {
+		return e.removeServiceFunc(e.sn, opts)
+	}
+	return e.s.removeServiceWithOptionsUnlocked(e.sn, opts)
+}
+
+func (e *ttyExecer) managedTargetLabel() string {
+	if e.s == nil {
+		return "service"
+	}
+	service, err := e.s.serviceView(e.sn)
+	if err != nil {
+		return "service"
+	}
+	if service.ServiceType() == db.ServiceTypeVM {
+		return "VM"
+	}
+	return "service"
+}
+
+func (e *ttyExecer) printRemoveWarnings(report *RemoveReport) {
+	if report == nil {
+		return
+	}
+	for _, warn := range report.Warnings {
+		e.printf("warning: %v\n", warn)
+	}
+}
+
+// ServiceRunner is an interface for the minimal set of methods required to
+// manage a service.
+type ServiceRunner interface {
+	SetNewCmd(func(string, ...string) *exec.Cmd)
+
+	Start() error
+	Stop() error
+	Restart() error
+
+	Logs(opts *svc.LogOptions) error
+
+	Remove() error
+}
+
+// ServiceEnabler is an interface extension for services that can be enabled and
+// disabled.
+type ServiceEnabler interface {
+	Enable() error
+	Disable() error
+}
+
+func (e *ttyExecer) serviceRunner() (ServiceRunner, error) {
+	if e.serviceRunnerFn != nil {
+		return e.serviceRunnerFn()
+	}
+	service, err := e.newServiceRunner()
+	if err != nil {
+		return nil, err
+	}
+	service.SetNewCmd(e.newCmd)
+	return service, nil
+}
+
+func (e *ttyExecer) newServiceRunner() (ServiceRunner, error) {
+	st, err := e.s.serviceType(e.sn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service type: %w", err)
+	}
+	return e.serviceRunnerForType(st)
+}
+
+func (e *ttyExecer) serviceRunnerForType(st db.ServiceType) (ServiceRunner, error) {
+	switch st {
+	case db.ServiceTypeSystemd:
+		return e.systemdRunner()
+	case db.ServiceTypeDockerCompose:
+		return e.dockerComposeRunner()
+	case db.ServiceTypeVM:
+		return &vmRunner{name: e.sn}, nil
+	default:
+		return nil, fmt.Errorf("%w %q", errUnhandledServiceType, st)
+	}
+}
+
+func (e *ttyExecer) systemdRunner() (ServiceRunner, error) {
+	systemd, err := e.s.systemdService(e.sn)
+	if err != nil {
+		return nil, err
+	}
+	return &systemdServiceRunner{SystemdService: systemd}, nil
+}
+
+func (e *ttyExecer) dockerComposeRunner() (ServiceRunner, error) {
+	docker, err := e.s.dockerComposeService(e.sn)
+	if err != nil {
+		return nil, err
+	}
+	return &dockerComposeServiceRunner{DockerComposeService: docker}, nil
+}
+
+type systemdServiceRunner struct {
+	*svc.SystemdService
+	newCmd func(string, ...string) *exec.Cmd
+}
+
+func (s *systemdServiceRunner) SetNewCmd(f func(string, ...string) *exec.Cmd) {
+	s.newCmd = f
+}
+
+func (s *systemdServiceRunner) Start() error {
+	return s.SystemdService.Start()
+}
+
+func (s *systemdServiceRunner) Stop() error {
+	return s.SystemdService.Stop()
+}
+
+func (s *systemdServiceRunner) Restart() error {
+	return s.SystemdService.Restart()
+}
+
+// Enable enables the service and starts it.
+func (s *systemdServiceRunner) Enable() error {
+	if err := s.SystemdService.Enable(); err != nil {
+		return err
+	}
+	return s.SystemdService.Start()
+}
+
+// Disable stops and disables the service.
+func (s *systemdServiceRunner) Disable() error {
+	if err := s.SystemdService.Stop(); err != nil {
+		return err
+	}
+	return s.SystemdService.Disable()
+}
+
+func (s *systemdServiceRunner) Logs(opts *svc.LogOptions) error {
+	c := s.newCmd("journalctl", systemdLogArgs(s.Name(), opts)...)
+	if err := c.Start(); err != nil {
+		return fmt.Errorf("failed to start journalctl: %w", err)
+	}
+	if err := c.Wait(); err != nil {
+		return fmt.Errorf("failed to wait for journalctl: %w", err)
+	}
+	return nil
+}
+
+func systemdLogArgs(unit string, opts *svc.LogOptions) []string {
+	if opts == nil {
+		opts = &svc.LogOptions{}
+	}
+	args := []string{"--no-pager", "--output=cat"}
+	if opts.Follow {
+		args = append(args, "--follow")
+	}
+	if opts.Lines > 0 {
+		args = append(args, "--lines="+strconv.Itoa(opts.Lines))
+	}
+	return append(args, "--unit="+unit)
+}
+
+func (s *systemdServiceRunner) Remove() error {
+	if err := s.SystemdService.Stop(); err != nil {
+		return err
+	}
+	return s.Uninstall()
+}
+
+type dockerComposeServiceRunner struct {
+	*svc.DockerComposeService
+}
+
+func (s *dockerComposeServiceRunner) SetNewCmd(f func(string, ...string) *exec.Cmd) {
+	s.NewCmd = f
+	s.NewCmdContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return f(name, args...)
+	}
+}
+
+func (s *dockerComposeServiceRunner) Start() error {
+	return s.DockerComposeService.Start()
+}
+
+func (s *dockerComposeServiceRunner) Stop() error {
+	return s.DockerComposeService.Stop()
+}
+
+func (s *dockerComposeServiceRunner) Restart() error {
+	return s.DockerComposeService.Restart()
+}
+
+func (s *dockerComposeServiceRunner) Logs(opts *svc.LogOptions) error {
+	return s.DockerComposeService.Logs(opts)
+}
+
+func (s *dockerComposeServiceRunner) Remove() error {
+	return s.DockerComposeService.Remove()
+}

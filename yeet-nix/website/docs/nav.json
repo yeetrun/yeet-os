@@ -1,0 +1,95 @@
+{
+  "items": [
+    {
+      "type": "folder",
+      "path": "/getting-started",
+      "title": "Getting Started",
+      "children": [
+        { "type": "link", "path": "/quick-start", "title": "Quick Start" },
+        {
+          "type": "link",
+          "path": "/service-workspace",
+          "title": "Service Workspace"
+        },
+        {
+          "type": "link",
+          "path": "/host-setup",
+          "title": "Host Setup"
+        }
+      ]
+    },
+    { "type": "break" },
+    {
+      "type": "folder",
+      "path": "/operations",
+      "title": "Daily Workflows",
+      "children": [
+        { "type": "link", "path": "/workflows", "title": "Workflows" },
+        {
+          "type": "link",
+          "path": "/troubleshooting",
+          "title": "Troubleshooting"
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "path": "/security",
+      "title": "Security",
+      "children": [
+        {
+          "type": "link",
+          "path": "/tailscale-access-grants",
+          "title": "Tailscale Access Grants"
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "path": "/payloads",
+      "title": "Payload Guides",
+      "children": [
+        { "type": "link", "path": "/", "title": "Choose a Payload" },
+        { "type": "link", "path": "/containers", "title": "Containers" },
+        { "type": "link", "path": "/binaries", "title": "Binaries & Scripts" },
+        { "type": "link", "path": "/vms", "title": "VMs" },
+        { "type": "link", "path": "/cron-jobs", "title": "Cron Jobs" }
+      ]
+    },
+    {
+      "type": "folder",
+      "path": "/concepts",
+      "title": "Concepts",
+      "children": [
+        { "type": "link", "path": "/architecture", "title": "How yeet Works" },
+        { "type": "link", "path": "/tailscale", "title": "Tailscale Setup" },
+        { "type": "link", "path": "/networking", "title": "Networking" },
+        { "type": "link", "path": "/dns", "title": "DNS" },
+        { "type": "link", "path": "/service-types", "title": "Service Types" },
+        { "type": "link", "path": "/data-layout", "title": "Data Layout" },
+        { "type": "link", "path": "/zfs", "title": "ZFS" },
+        {
+          "type": "link",
+          "path": "/configuration-and-prefs",
+          "title": "Configuration & Prefs"
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "path": "/cli",
+      "title": "CLI Reference",
+      "children": [
+        {
+          "type": "link",
+          "path": "/cli-overview",
+          "title": "How Commands Work"
+        },
+        { "type": "link", "path": "/yeet-cli", "title": "yeet Commands" },
+        { "type": "link", "path": "/catch-cli", "title": "catch Reference" }
+      ]
+    },
+    { "type": "link", "path": "/faq", "title": "FAQ" },
+    { "type": "link", "path": "/changelog", "title": "Changelog" }
+  ]
+}

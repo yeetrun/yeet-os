@@ -1,18 +1,19 @@
-/.direnv
-/bin
-/data
-/gomod2nix-template
-/Makefile
 /result
-/test-results
-/.tmp
-/guest/yeet-init/target
-/guest/yeet-agent/target
-/.gomu_history.json
-/mutation-report.json
-/mutation-report.txt
-go.work
-go.work.*
-AGENTS.local.md
-.codex/hooks/__pycache__/
-.codex/hooks/*.pyc
+/result-*
+
+# Local installer builds, enrollment keys and unattended installation media.
+*.iso
+*.qcow2
+*.key
+*.pem
+.env
+.env.local
+/seed/
+/install.json
+/machine.json
+/.yeet-build-*/
+
+# Local development artifacts.
+__pycache__/
+.ruff_cache/
+.DS_Store

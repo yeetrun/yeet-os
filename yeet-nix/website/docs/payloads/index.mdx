@@ -1,0 +1,97 @@
+---
+title: Payloads
+description: Choose the right deploy path for the thing you already have.
+---
+
+A payload is the thing you give to `yeet run` or `yeet stage`. Choose the guide
+that matches what you already have.
+
+Choose the smallest payload type that matches the workload. Use a VM only when
+the service needs a full guest OS or stronger isolation.
+
+<CardLinks
+  cards={[
+    {
+      title: "Containers",
+      description: "Compose files, Dockerfiles, image refs, Python files, and TypeScript files.",
+      href: "/docs/payloads/containers",
+    },
+    {
+      title: "Binaries & Scripts",
+      description: "One long-running host process from a local executable or shebang script.",
+      href: "/docs/payloads/binaries",
+    },
+    {
+      title: "VMs",
+      description: "Ubuntu, NixOS, or imported Linux microVMs for workloads that need a full OS.",
+      href: "/docs/payloads/vms",
+    },
+    {
+      title: "Cron Jobs",
+      description: "Scheduled jobs installed as systemd timers on the catch host.",
+      href: "/docs/payloads/cron-jobs",
+    },
+  ]}
+/>
+
+## Quick chooser
+
+| You have | Start with |
+| --- | --- |
+| `compose.yml` | [Containers](/docs/payloads/containers#compose-stacks) |
+| Public image, such as `nginx:alpine` | [Containers](/docs/payloads/containers#docker-images) |
+| Local Dockerfile | [Containers](/docs/payloads/containers#dockerfiles) |
+| Local container image | [Containers](/docs/payloads/containers#docker-images) |
+| Linux binary | [Binaries & Scripts](/docs/payloads/binaries#binaries) |
+| Shell script or other shebang file | [Binaries & Scripts](/docs/payloads/binaries#scripts) |
+| Scheduled job | [Cron Jobs](/docs/payloads/cron-jobs) |
+| Ubuntu, NixOS, or imported Linux guest | [VMs](/docs/payloads/vms) |
+
+## Create a workspace first
+
+Before your first `yeet run`, create or enter a
+[Service Workspace](/docs/getting-started/service-workspace). A successful
+deploy writes `yeet.toml` in the current directory, so the workspace is where
+yeet saves relative payload paths and future run options.
+
+Keep `yeet.toml` with the files it references.
+
+## Common flow
+
+Most services follow this loop:
+
+```bash
+yeet run <svc> <payload>
+yeet logs -f <svc>
+yeet status <svc>
+```
+
+After the first successful deploy, yeet writes service config to `yeet.toml`.
+For an existing service, a payload-only redeploy reuses saved options such as
+network mode, tags, service root, snapshot settings, and payload args. The
+payload changes; the operating context stays put unless you change it.
+
+## Optional storage and networking
+
+Use the payload guide first. Then add storage or networking options when the
+service needs them. Network modes also choose the outbound internet path:
+`svc` uses the catch host gateway, `lan` uses the LAN or VLAN gateway, and
+plain `ts` needs a Tailscale exit node for ordinary internet access.
+
+Networking and storage flags change how the service runs and recovers.
+
+```bash
+yeet run <svc> ./compose.yml --net=svc,ts
+yeet run <svc> ./compose.yml --service-root=tank/apps/<svc> --zfs
+```
+
+See [Networking](/docs/concepts/networking) for `svc`, `lan`, `ts`, and
+combined modes. See [ZFS](/docs/concepts/zfs) for dataset-backed service roots
+and snapshots.
+
+## Related docs
+
+- [Workflows](/docs/operations/workflows) shows common deploy and update flows.
+- [Service Types](/docs/concepts/service-types) explains payload detection.
+- [How Commands Work](/docs/cli/cli-overview) explains host targeting and
+  argument routing.

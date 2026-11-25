@@ -1,0 +1,175 @@
+---
+title: Service Workspace
+description: Keep payload files and yeet.toml together so deploy state has one obvious home.
+---
+
+Use a service workspace before your first `yeet run`. A directory such as
+`~/yeet-services` keeps third-party Compose apps, env files, custom
+Dockerfiles, scripts, binaries, and `yeet.toml` together.
+
+Run deploy and service commands from this directory when you are working on the
+payload files. Yeet first looks for `yeet.toml` in or above the current
+directory. If none is found, it uses the configured workspace that owns the
+target catch host.
+
+If you already have a workspace with `yeet.toml`, run an interactive command
+such as `yeet status` from that directory. Yeet can offer to save it as a
+registered workspace, so future commands from other directories can find it.
+
+A consistent workspace lets yeet reuse saved payload paths, hosts, network
+flags, service roots, native run-as identities, native sandbox policies,
+snapshots, cron schedules, and payload args.
+
+Use one workspace so deployment state stays with the files it describes,
+instead of spreading across shell history and unrelated directories.
+
+## Create a workspace
+
+Run this on your workstation:
+
+```bash
+mkdir -p ~/yeet-services
+cd ~/yeet-services
+```
+
+Use one folder per app or custom service:
+
+```text
+~/yeet-services/
+  yeet.toml
+  uptime-kuma/
+    compose.yml
+  vaultwarden/
+    compose.yml
+    vaultwarden.env
+  home-assistant/
+    compose.yml
+  gitea/
+    compose.yml
+  mqtt-bridge/
+    Dockerfile
+    config.yml
+  sensor-collector/
+    cmd/
+      sensor-collector/
+  jobs/
+    backup.sh
+  bin/
+    sensor-collector
+```
+
+Yeet creates `yeet.toml` after a successful deploy that saves project config.
+Create or enter the workspace before deploying so that file lands in the right
+place. You do not need to create it by hand.
+
+## Deploy third-party apps
+
+Most homelab apps start from a Compose file:
+
+```bash
+cd ~/yeet-services
+yeet run uptime-kuma ./uptime-kuma/compose.yml
+yeet run --env-file=./vaultwarden/vaultwarden.env vaultwarden ./vaultwarden/compose.yml
+```
+
+After each successful deploy, yeet saves the service entry in `yeet.toml`.
+Future commands can reuse that saved payload path and deploy options.
+
+## Deploy custom services
+
+Use the same workspace for local Dockerfiles:
+
+```bash
+cd ~/yeet-services
+yeet run mqtt-bridge ./mqtt-bridge/Dockerfile
+```
+
+Build binaries for the catch host architecture before deploying them:
+
+```bash
+cd ~/yeet-services
+GOOS=linux GOARCH=amd64 go build -o ./bin/sensor-collector ./sensor-collector/cmd/sensor-collector
+yeet run sensor-collector ./bin/sensor-collector
+```
+
+New native services run as the shared `yeet-svc` account. When a service needs
+an operator-created account, select it explicitly and yeet saves that choice:
+
+```bash
+yeet run sensor-collector ./bin/sensor-collector --run-as=sensors:sensors
+```
+
+Fresh native services also use the Bubblewrap sandbox by default. Save any
+additional read-only files or directories and writable directories at the
+initial run:
+
+```bash
+yeet run sensor-collector ./bin/sensor-collector \
+  --sandbox-ro=/etc/sensor-collector \
+  --sandbox-rw=/srv/sensor-cache:/cache
+```
+
+Yeet writes the resolved `sandbox`, `sandbox_ro`, and `sandbox_rw` values only
+after Catch succeeds. Existing native services keep their current state until
+you make an explicit one-service choice with `yeet service set`.
+
+Put scheduled jobs beside the rest of the homelab payloads:
+
+```bash
+cd ~/yeet-services
+yeet run backup ./jobs/backup.sh --cron="0 3 * * *"
+yeet run private-backup ./jobs/backup.sh --cron="0 3 * * *" --run-as=backup
+```
+
+## Re-run saved services
+
+Run saved services from the workspace directory:
+
+```bash
+cd ~/yeet-services
+yeet run uptime-kuma
+yeet run mqtt-bridge
+```
+
+Yeet reads `yeet.toml`, finds the saved payload path, and reuses saved options
+such as network mode, env file, service root, native run-as identity, native
+sandbox policy, snapshot settings, and payload args. If you are outside the
+workspace and yeet already knows which workspace owns that catch host, it falls
+back to the registered workspace.
+
+## Keep paths relative
+
+Prefer paths that stay inside the workspace:
+
+```bash
+yeet run uptime-kuma ./uptime-kuma/compose.yml
+yeet run mqtt-bridge ./mqtt-bridge/Dockerfile
+yeet run sensor-collector ./bin/sensor-collector
+```
+
+Relative paths make the workspace easier to back up, move, or sync. They also
+keep `yeet.toml` readable when the workspace moves.
+
+## Use service folders
+
+Keep each third-party app in its own folder with its Compose file, env files,
+and app-specific config. Use shared folders such as `bin/` and `jobs/` for
+small custom payloads.
+
+Avoid running deploy commands from random directories. If yeet cannot find the
+right `yeet.toml`, it cannot reuse the saved service entry.
+
+Service names must use 1-63 lowercase letters, numbers, and dashes. Start with
+a letter and end with a letter or number.
+
+## Related docs
+
+- [Quick Start](/docs/getting-started/quick-start) installs yeet and catch.
+- [Payloads](/docs/payloads) helps choose Compose, Dockerfile, binary, script,
+  or VM payloads, including scheduled native jobs.
+- [Workflows](/docs/operations/workflows) shows daily deploy and update
+  commands.
+- [Configuration](/docs/concepts/configuration-and-prefs) explains
+  `yeet.toml`, client config, and host defaults.
+- [Native Sandboxing](/docs/concepts/native-sandboxing) explains sandbox state,
+  exposures, and safe replacement.

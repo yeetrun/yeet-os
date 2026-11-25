@@ -1,0 +1,127 @@
+---
+title: Yeet Docs
+description: Docs for installing yeet, deploying services, and operating catch hosts.
+---
+
+Yeet runs from your workstation. Catch runs on each Linux host. Together they
+install services, move files, start units, tail logs, and remove services when
+you ask.
+
+Start with the smallest working path. Then open the page that matches the host,
+payload, network, or operation in front of you.
+
+## Start here
+
+<ButtonLinks
+  columns={2}
+  columnsWhenSmall={1}
+  links={[
+    { text: "Quick Start", href: "/docs/getting-started/quick-start" },
+    {
+      text: "Host Setup",
+      href: "/docs/getting-started/host-setup",
+      theme: "neutral",
+    },
+  ]}
+/>
+
+## Common tasks
+
+<CardLinks
+  cards={[
+    {
+      title: "Set up Tailscale",
+      description:
+        "Create the tag policy and OAuth credential catch needs before init.",
+      href: "/docs/concepts/tailscale",
+    },
+    {
+      title: "Choose what to run",
+      description:
+        "Pick containers, binaries, cron jobs, or VMs by what the workload needs.",
+      href: "/docs/payloads",
+    },
+    {
+      title: "Organize service files",
+      description:
+        "Keep third-party apps, env files, custom payloads, and yeet.toml in one workspace.",
+      href: "/docs/getting-started/service-workspace",
+    },
+    {
+      title: "Operate a service",
+      description:
+        "Update, restart, tail logs, edit config, stage changes, and copy files from the CLI.",
+      href: "/docs/operations/workflows",
+    },
+    {
+      title: "Fix a problem",
+      description:
+        "Start with common connection, Docker, networking, VM, and cleanup failures.",
+      href: "/docs/operations/troubleshooting",
+    },
+  ]}
+/>
+
+## Optional topics
+
+Use these when the service or host has more specific requirements.
+
+<CardLinks
+  cards={[
+    {
+      title: "Host targeting",
+      description:
+        "Understand machine hosts, catch hosts, CATCH_HOST, and svc@host syntax.",
+      href: "/docs/cli/cli-overview",
+    },
+    {
+      title: "Choose networking",
+      description:
+        "Pick reachability, DNS, and outbound internet paths as one decision.",
+      href: "/docs/concepts/networking",
+    },
+    {
+      title: "Run VMs",
+      description:
+        "Create Ubuntu, NixOS, or imported microVMs and manage images, resources, files, and recovery.",
+      href: "/docs/payloads/vms",
+    },
+    {
+      title: "Use recovery points",
+      description:
+        "Use ZFS service roots, snapshots, clone-first recovery, and VM restore.",
+      href: "/docs/concepts/zfs",
+    },
+  ]}
+/>
+
+## Reference
+
+Use reference pages after you know the workflow you want. References are maps,
+not tutorials.
+
+<CardLinks
+  cards={[
+    {
+      title: "yeet commands",
+      description: "Client command reference grouped by workflow.",
+      href: "/docs/cli/yeet-cli",
+    },
+    {
+      title: "catch reference",
+      description: "Host-side commands, flags, and install behavior.",
+      href: "/docs/cli/catch-cli",
+    },
+    {
+      title: "Configuration",
+      description: "Project config, client config, and environment variables.",
+      href: "/docs/concepts/configuration-and-prefs",
+    },
+    {
+      title: "Data layout",
+      description:
+        "Where catch stores service data, configs, generations, and snapshots.",
+      href: "/docs/concepts/data-layout",
+    },
+  ]}
+/>

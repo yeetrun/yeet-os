@@ -1,0 +1,207 @@
+---
+title: ZFS
+description: Use datasets, snapshots, and VM disk clones for service storage.
+---
+
+Use ZFS when the recovery model matters: named datasets, pre-change snapshots,
+or fast VM disk clones.
+
+## Where ZFS applies
+
+ZFS is a storage choice, not a payload type. It can back:
+
+- Container, binary, script, and cron service roots.
+- VM service roots and VM disks.
+- Yeet-managed snapshots before risky service changes.
+- Shared VM image bases for faster ZFS-backed VM creates.
+
+Use raw filesystem paths when you do not need datasets, snapshots, or clones.
+
+## Service roots
+
+Without `--zfs`, `--service-root` is an absolute filesystem path on the catch
+host. With `--zfs`, `--service-root` is a ZFS dataset name.
+
+```bash
+yeet run <svc> ./compose.yml --service-root=/srv/apps/<svc>
+yeet run <svc> ./compose.yml --service-root=tank/apps/<svc> --zfs
+```
+
+Parent datasets must already exist. If the dataset already exists or its
+mountpoint already contains files, catch prints a warning and deploys into it.
+That warning is worth reading; existing files are existing state.
+
+For host-wide storage, `yeet init --zfs` and `yeet host set --zfs` treat the
+services-root dataset as a prefix. Services under that default root, including
+`catch`, use child datasets such as `tank/apps/<svc>`.
+
+`yeet.toml` records the service-root intent for future deploys. If another
+checkout changes the live service root, sync it back:
+
+```bash
+yeet service sync <svc>
+```
+
+## Snapshots
+
+ZFS-backed service roots get yeet-managed snapshots before risky changes. The
+built-in default keeps the newest 5 yeet-created snapshots, prunes snapshots
+older than 7 days, and runs before these events:
+
+- `run`
+- `docker-update`
+- `service-root-migration`
+
+Yeet skips first deploys because there is no prior service state to recover.
+Catch prunes only snapshots it created for that service. Snapshots are a safety
+rail, not a full backup strategy.
+
+```bash
+yeet snapshots defaults show
+yeet snapshots defaults set --enabled=true --keep-last=5 --max-age=7d
+yeet snapshots defaults set --events=run,docker-update --required=false
+```
+
+Override one service with `yeet service set`:
+
+```bash
+yeet service set <svc> --snapshots=off
+yeet service set <svc> --snapshots=on --snapshot-keep-last=3 --snapshot-max-age=72h
+yeet service set <svc> --snapshot-events=run,docker-update
+yeet service set <svc> --snapshots=inherit
+```
+
+Snapshot-only changes do not require a service stop. Stop the service before a
+service-root move.
+
+For VM payloads, the policy controls retention for manual
+`yeet snapshots create <vm>` commands. Automatic service-root snapshot events
+do not apply to VM web-run snapshot controls.
+
+## Recovery points
+
+Yeet-created ZFS snapshots are recovery points for a service or VM disk. List
+them when you need to see what yeet can identify for a service:
+
+```bash
+yeet snapshots list
+yeet snapshots list <svc>
+```
+
+Inspect a recovery point before relying on it. The inspect view shows the
+service, snapshot name, storage target, creation time, event, mode, retention
+state, and any comment saved with the point:
+
+```bash
+yeet snapshots inspect <svc> <snapshot>
+```
+
+Protect important recovery points when they should survive automatic retention
+pruning:
+
+```bash
+yeet snapshots protect <svc> <snapshot>
+```
+
+Automatic pruning skips protected recovery points. Unprotect a recovery point
+before removing it.
+
+Manual recovery point flow:
+
+```bash
+yeet snapshots create <svc> --comment "before upgrade"
+yeet snapshots list <svc>
+yeet snapshots inspect <svc> <snapshot>
+yeet snapshots protect <svc> <snapshot>
+yeet snapshots unprotect <svc> <snapshot>
+yeet snapshots rm <svc> <snapshot> --yes
+```
+
+## Recovery workflow
+
+Use `clone` first when you want to inspect a recovery point or copy files out
+without changing the original service.
+
+```bash
+yeet snapshots clone <svc> <snapshot> <svc>-recover
+yeet info <svc>-recover
+```
+
+Use `restore` when you want to roll the original service data back in place:
+
+```bash
+yeet snapshots restore <svc> <snapshot> --stop --yes
+```
+
+`restore` creates a pre-restore recovery point before it mutates ZFS state. If
+the restore does not produce the result you expected, inspect the new
+pre-restore point before making another change.
+
+Snapshots recover storage state. Service generations recover deployed
+definitions and install artifacts. The default `--generation=current` keeps
+the current deployed definition while restoring data. Pass
+`--generation=snapshot` only when the selected snapshot recorded a generation
+and you also want to restore that older deployed definition.
+
+## Moving roots
+
+`yeet run` can set the initial root for a new service. To move an existing
+service root, stop the service and use `yeet service set`:
+
+```bash
+yeet stop <svc>
+yeet service set <svc> --service-root=tank/apps/<svc> --zfs --copy
+yeet service set <svc> --service-root=tank/apps/<svc> --zfs --empty
+```
+
+Use `--copy` to copy the old root into the new dataset, or `--empty` to create
+a new empty root. `yeet service set` leaves the old root in place until you
+decide the migration is good.
+
+## ZFS-backed VMs
+
+For VMs, `--zfs` lets yeet prepare the VM disk on a ZFS-backed service root:
+
+```bash
+yeet run <vm> vm://ubuntu/26.04 --service-root=tank/vms/<vm> --zfs
+```
+
+The first VM created on a pool for an image family/version prepares a shared
+ZFS image base. Later VMs on the same pool and image family/version clone that
+base instead of writing the root filesystem again.
+
+When a newer VM image enters the cache, yeet keeps ZFS image bases that VM
+clones still use and prunes only old unreferenced bases. Use
+`yeet vm images prune --dry-run` to inspect cleanup before removing anything.
+
+Stop a ZFS-backed VM before growing its disk:
+
+```bash
+yeet stop <vm>
+yeet vm set <vm> --disk=128g
+yeet start <vm>
+```
+
+Yeet grows the VM disk and guest ext4 filesystem. Disk shrink and live resize
+are not supported.
+
+`yeet rm --clean <vm>` removes the VM service data, VM clone, and local
+`yeet.toml` entry. It does not remove the shared image base, so future VMs can
+keep cloning it.
+
+If ZFS is present for VM disk setup, the host also needs `udevadm`.
+
+## When to use ZFS
+
+Use ZFS when you want named datasets, storage-level recovery points, or faster
+repeat VM creates on the same pool. Skip it for simple services where a normal
+filesystem path is enough.
+
+## Related docs
+
+- [Data Layout](/docs/concepts/data-layout) shows where service files live.
+- [VMs](/docs/payloads/vms) covers VM-specific ZFS behavior.
+- [Containers](/docs/payloads/containers), [Binaries & Scripts](/docs/payloads/binaries),
+  and [Cron Jobs](/docs/payloads/cron-jobs) show payload-specific examples.
+- [yeet CLI](/docs/cli/yeet-cli) lists the `--zfs`, snapshot, and service-root
+  flags.

@@ -1,0 +1,142 @@
+---
+title: Cron Jobs
+description: Install scheduled scripts or binaries as systemd timers.
+---
+
+Add `--cron` to `yeet run` to install a native binary or shebang script as a
+scheduled job. Catch implements the schedule as a systemd timer and accepts a
+five-field cron expression.
+
+Cron jobs are still services. They have logs, state, cleanup, and saved config.
+Container, Compose, and VM payloads cannot use `--cron`.
+
+Cron jobs can use `iso` networking. The timer remains the scheduling unit, and
+the invoked systemd service joins the iso network namespace. Changing the
+network does not run the job merely to verify it. iso networking is independent
+of `--run-as`; it does not change workload privileges or claim to contain a
+host-root process.
+
+Run these commands from a
+[Service Workspace](/docs/getting-started/service-workspace). The first
+successful scheduled install writes `yeet.toml` in the current directory.
+
+## Create a job
+
+```bash
+yeet run backup ./backup --cron="0 3 * * *" --run-as=backup --net=iso -- --full
+```
+
+Flags before `--` control the scheduled service. Arguments after `--` belong to
+the binary or script. Scheduled jobs retain the native run options for
+environment files, service roots, ZFS, snapshots, and payload arguments.
+
+Jobs run as the shared `yeet-svc` account by default. `--run-as` selects a
+different existing host account, and yeet saves that identity for later runs.
+Use `yeet service set <svc> --run-as=yeet-svc` to change the identity.
+
+Fresh scheduled jobs also use the native Bubblewrap sandbox by default. Add
+read-only files or directories and writable directories with the same controls
+as ordinary native services:
+
+```bash
+yeet run backup ./backup --cron="0 3 * * *" \
+  --sandbox-ro=/etc/backup \
+  --sandbox-rw=/srv/backup-cache:/cache
+```
+
+Existing scheduled jobs keep their reported `legacy`, `on`, or `off` state
+until you choose explicitly:
+
+```bash
+yeet service set backup --sandbox=on
+yeet service set backup --sandbox=off
+```
+
+Changing sandbox policy replaces and verifies both the service and timer units.
+Catch does not invoke the job payload as a migration test. The timer retains
+its expected enabled or waiting intent after the change.
+
+Change the network for an existing job through `service set`:
+
+```bash
+yeet service set <svc> --net=iso
+yeet service set <svc> --net=host
+```
+
+Yeet saves arguments after `--` as payload args and replays them on future
+runs.
+
+## Redeploy a job
+
+Redeploy a scheduled payload with a non-empty `--cron` value to replace its
+schedule:
+
+```bash
+yeet run <svc> ./job.sh --cron="30 2 * * *"
+```
+
+Omitting `--cron` preserves the installed schedule. If `yeet.toml` contains
+the service, you can omit both the payload and `--cron` to replay its saved
+configuration:
+
+```bash
+yeet run <svc>
+```
+
+The saved `schedule` marks the service as scheduled. To return the name to
+ordinary service mode, remove it with `yeet rm` and recreate it without
+`--cron`.
+
+## Change only the schedule
+
+Change the timing of an installed scheduled native binary or script without a
+local payload:
+
+```bash
+yeet service set backup --cron="30 2 * * *"
+```
+
+`service set --cron` works only for an already scheduled native service. It
+never converts an ordinary, container, or VM service into a scheduled service.
+It cannot clear a schedule or combine with another service mutation, and it
+preserves the server-side payload and other settings. After Catch updates the
+schedule, yeet updates a matching `yeet.toml`. Run `yeet service sync <svc>` if
+the local config is absent or cannot be saved.
+
+## Environment and files
+
+```bash
+yeet env copy <svc> ./job.env
+yeet env set <svc> LOG_LEVEL=debug
+yeet copy ./config.yml <svc>:config/config.yml
+```
+
+Use [Binaries & Scripts](/docs/payloads/binaries) for payload preparation
+details and [Native Sandboxing](/docs/concepts/native-sandboxing) for exposure
+replacement, dependency triggers, and the security boundary.
+
+## ZFS service roots
+
+Cron jobs can use ZFS-backed service roots too, which is useful for jobs that
+write persistent state or process files under their managed data directory. If
+the job only prints a heartbeat, a normal service root is usually enough.
+
+```bash
+yeet run <svc> ./job.sh --cron="0 9 * * *" --service-root=tank/jobs/<svc> --zfs
+```
+
+Use `yeet service set` to move an installed job to another root. Stop the job
+before moving its root. See [ZFS](/docs/concepts/zfs) for service-root and
+snapshot behavior.
+
+## Inspect and clean up
+
+```bash
+yeet status <svc>
+yeet logs -f <svc>
+yeet rm <svc>
+yeet rm --clean <svc>
+```
+
+`--clean` removes the managed service data root and local `yeet.toml` entry in
+addition to the scheduled job. Read the confirmation prompt before accepting.
