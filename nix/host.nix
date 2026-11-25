@@ -1,7 +1,7 @@
 { config, lib, pkgs, ... }:
 let
   cfg = config.services.yeet-host;
-  package = pkgs.callPackage ./package.nix { };
+  package = pkgs.yeet-nix;
   unitDir = "/var/lib/yeet-systemd/etc/systemd/system";
   runtimeTools = with pkgs; [
     package bubblewrap coreutils bash iproute2 iptables ipset nftables procps
@@ -36,7 +36,14 @@ in {
     lanUplink = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Ethernet interface for a DHCP-backed br0 used by VM LAN payloads.";
+      description = "Ethernet interface for the host bridge br0 used by VM LAN payloads.";
+    };
+    lanBridge = lib.mkOption {
+      type = lib.types.nullOr (lib.types.strMatching "[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,14}");
+      default = if cfg.lanUplink != null then "br0"
+        else if builtins.length (builtins.attrNames config.networking.bridges) == 1
+        then builtins.head (builtins.attrNames config.networking.bridges) else null;
+      description = "Existing NixOS bridge for LAN VMs. Set explicitly on hosts with multiple bridges.";
     };
     hostname = lib.mkOption {
       type = lib.types.nullOr (lib.types.strMatching "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?");
@@ -45,9 +52,11 @@ in {
     };
   };
   config = lib.mkIf cfg.enable {
+    # networkd configures DHCP on virtual bridges as well as physical ports.
+    networking.useNetworkd = lib.mkIf (cfg.lanUplink != null) (lib.mkDefault true);
     networking.bridges.br0 = lib.mkIf (cfg.lanUplink != null) { interfaces = [ cfg.lanUplink ]; };
     networking.interfaces = lib.optionalAttrs (cfg.lanUplink != null) {
-      br0.useDHCP = true;
+      br0.useDHCP = lib.mkDefault true;
       ${cfg.lanUplink}.useDHCP = false;
     };
     virtualisation.containerd.enable = true;
@@ -63,10 +72,12 @@ in {
     };
     systemd.services.docker = {
       path = [ pkgs.nftables ];
-      after = [ "containerd.service" ];
+      wants = [ "yeet-docker-prereqs.target" ];
+      after = [ "containerd.service" "yeet-docker-prereqs.target" ];
       requires = [ "containerd.service" ];
     };
     environment.etc."docker/daemon.json".text = builtins.toJSON config.virtualisation.docker.daemon.settings;
+    environment.etc."yeet-os/vm-lan-bridge" = lib.mkIf (cfg.lanBridge != null) { text = cfg.lanBridge + "\n"; };
     environment.etc."yeet-os/managed".text = "Catch is managed by NixOS.\n";
     environment.etc."yeet-os/sandbox-bin".source = sandboxBin;
     environment.etc."yeet-os/sandbox-lib".source = pkgs.runCommand "yeet-sandbox-lib" {} ''
@@ -116,12 +127,47 @@ in {
       "L+ /sbin/mount.cifs - - - - ${lib.getBin pkgs.cifs-utils}/bin/mount.cifs"
       "L+ /bin/rm - - - - ${pkgs.coreutils}/bin/rm"
     ];
+    environment.etc."yeet-os/service-ns" = {
+      source = ../yeet-nix/pkg/netns/netns-scripts/service-ns;
+      mode = "0555";
+    };
+    systemd.services.yeet-ns = {
+      description = "Yeet service network";
+      wantedBy = [ "multi-user.target" ];
+      before = [ "catch.service" "yeet-docker-prereqs.target" "docker.service" ];
+      after = [ "systemd-sysctl.service" "firewall.service" ];
+      path = runtimeTools;
+      environment.CATCH_BIN = "${package}/bin/catch";
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.bash}/bin/bash ${../yeet-nix/pkg/netns/netns-scripts/yeet-ns}";
+      };
+    };
+    systemd.targets.yeet-docker-prereqs = {
+      description = "Yeet Docker network prerequisites";
+      wants = [ "catch.service" "yeet-ns.service" ];
+      after = [ "catch.service" "yeet-ns.service" ];
+      before = [ "docker.service" ];
+    };
+    systemd.services.yeet-dns = {
+      description = "DNS for Yeet services";
+      requires = [ "yeet-ns.service" ];
+      after = [ "yeet-ns.service" ];
+      before = [ "catch.service" ];
+      partOf = [ "catch.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.dataDir cfg.servicesRoot ];
+      serviceConfig = {
+        ExecStart = "${package}/bin/catch --data-dir=${cfg.dataDir} --services-root=${cfg.servicesRoot} dns";
+        Restart = "on-failure";
+      };
+    };
     systemd.services.catch = {
       description = "Yeet host service";
       wantedBy = [ "multi-user.target" ];
       wants = [ "network-online.target" ];
       after = [ "network-online.target" "containerd.service" "systemd-tmpfiles-setup.service" ];
-      requires = [ "containerd.service" ];
+      requires = [ "containerd.service" "yeet-ns.service" "yeet-dns.service" ];
       environment.SYSTEMD_UNIT_PATH = "/etc/systemd/system:${unitDir}:";
       path = runtimeTools ++ [ config.virtualisation.docker.package config.systemd.package ];
       unitConfig.ConditionPathExists = [
@@ -134,7 +180,9 @@ in {
         mv -f /var/lib/yeet-host/run/.catch.new /var/lib/yeet-host/run/catch
       '';
       serviceConfig = {
-        ExecStart = "/var/lib/yeet-host/run/catch --tsnet-host=${if cfg.hostname == null then "%H" else cfg.hostname} --data-dir=${cfg.dataDir} --services-root=${cfg.servicesRoot}";
+        RuntimeDirectory = "yeet-admin";
+        RuntimeDirectoryMode = "0700";
+        ExecStart = "/var/lib/yeet-host/run/catch --local-admin --tsnet-host=${if cfg.hostname == null then "%H" else cfg.hostname} --data-dir=${cfg.dataDir} --services-root=${cfg.servicesRoot}";
         EnvironmentFile = [ "-${cfg.dataDir}/tsnet/enrollment.env" "-/run/yeet-enrollment.env" ];
         WorkingDirectory = "${cfg.servicesRoot}/catch/data";
         Restart = "on-failure";

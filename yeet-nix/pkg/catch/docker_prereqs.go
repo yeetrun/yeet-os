@@ -65,24 +65,13 @@ func dockerPluginSocketWaitCommand() string {
 	return "/bin/sh -c 'i=0; while [ \"$i\" -lt 600 ]; do [ -S " + dockerPluginSocket + " ] && exit 0; i=$((i+1)); sleep 0.1; done; exit 1'"
 }
 
-func dockerPrereqsTargetContent(serviceUnits []string) string {
-	serviceUnits = sortedUniqueUnits(serviceUnits)
-	wants := append([]string{"catch.service", "yeet-ns.service"}, serviceUnits...)
-	after := append([]string{"catch.service", "yeet-ns.service"}, serviceUnits...)
-
-	var b strings.Builder
-	b.WriteString("[Unit]\n")
-	b.WriteString("Description=Yeet Docker network prerequisites\n")
-	fmt.Fprintf(&b, "Wants=%s\n", strings.Join(wants, " "))
-	fmt.Fprintf(&b, "After=%s\n", strings.Join(after, " "))
-	b.WriteString("Before=docker.service\n")
-	return b.String()
-}
-
-func dockerDropInContent() string {
-	return "[Unit]\n" +
-		"Wants=" + dockerPrereqsTargetUnit + "\n" +
-		"After=" + dockerPrereqsTargetUnit + "\n"
+// NixOS owns the target and Docker ordering. Only its payload dependencies vary.
+func dockerPayloadDependencies(serviceUnits []string) string {
+	units := strings.Join(sortedUniqueUnits(serviceUnits), " ")
+	if units == "" {
+		return "[Unit]\n"
+	}
+	return fmt.Sprintf("[Unit]\nWants=%s\nAfter=%s\n", units, units)
 }
 
 func (i dockerPrereqsInstaller) install(serviceUnits []string) error {
@@ -91,18 +80,11 @@ func (i dockerPrereqsInstaller) install(serviceUnits []string) error {
 		run = defaultRunSystemctl
 	}
 
-	changed := false
-	targetChanged, err := writeTextFileIfChanged(i.path(svc.SystemdUnitDirectory, dockerPrereqsTargetUnit), dockerPrereqsTargetContent(serviceUnits), 0644)
+	path := i.path(svc.SystemdUnitDirectory, dockerPrereqsTargetUnit+".d", "payloads.conf")
+	changed, err := writeTextFileIfChanged(path, dockerPayloadDependencies(serviceUnits), 0644)
 	if err != nil {
 		return err
 	}
-	changed = changed || targetChanged
-
-	dropInChanged, err := writeTextFileIfChanged(i.path(svc.SystemdUnitDirectory, "docker.service.d", "yeet.conf"), dockerDropInContent(), 0644)
-	if err != nil {
-		return err
-	}
-	changed = changed || dropInChanged
 
 	if changed {
 		if err := run("daemon-reload"); err != nil {

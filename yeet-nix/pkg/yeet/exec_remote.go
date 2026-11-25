@@ -30,6 +30,9 @@ type rpcExecClient interface {
 }
 
 func newRPCClient(host string) *catchrpc.Client {
+	if host == "localhost" && onYeetOS() {
+		return catchrpc.NewUnixClient(catchrpc.LocalSocket)
+	}
 	return catchrpc.NewClient(host, defaultRPCPort)
 }
 

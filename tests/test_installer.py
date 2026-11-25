@@ -69,6 +69,21 @@ class InstallerTests(unittest.TestCase):
                 provision.discovery_interfaces({"interface": "gone"}, root), []
             )
 
+    def test_vm_lan_uses_a_wired_uplink_with_an_unambiguous_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "wifi" / "wireless").mkdir(parents=True)
+            self.assertIsNone(provision.lan_uplink(["wifi"], root))
+            self.assertEqual(provision.lan_uplink(["eth1", "wifi"], root), "eth1")
+            for routes, expected in [
+                (["eth2"], "eth2"),
+                (["wifi"], None),
+                (["eth1", "eth2"], None),
+                ([], None),
+            ]:
+                with patch.object(provision, "run", return_value=json.dumps([{"dev": r} for r in routes])):
+                    self.assertEqual(provision.lan_uplink(["eth1", "eth2", "wifi"], root), expected)
+
     def test_discovery_excludes_mounted_children_and_readonly_media(self):
         def device(path, **extra):
             return dict(path=path, type="disk", size=18 * 1024**3, ro=False) | extra

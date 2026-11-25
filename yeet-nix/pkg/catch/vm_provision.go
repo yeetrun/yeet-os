@@ -43,9 +43,6 @@ var (
 	verifyVMNetworkPlanForProvision      = verifyVMNetworkPlan
 	verifyVMISONetworkAbsentForProvision = verifyVMISONetworkPlanAbsent
 	acquireVMProvisionLockForProvision   = acquireVMProvisionLock
-	prepareHostVMLANBridgeForRunFn       = func(root string) (VMLANBridgePrepareStatus, error) {
-		return PrepareVMLANBridge(root, true)
-	}
 )
 
 type vmProvisionPlan struct {
@@ -270,83 +267,8 @@ func (e *ttyExecer) ensureVMLANBridgeForRun(flags cli.RunFlags) error {
 	if strings.TrimSpace(flags.MacvlanParent) != "" {
 		return nil
 	}
-	plan, err := resolveHostVMLANBridgeFn()
-	if err != nil {
-		if plan.NeedsPrepare || errors.Is(err, errVMLANBridgePreparationRequired) {
-			return e.prepareVMLANBridgeForRun(plan, err)
-		}
-		return fmt.Errorf("resolve VM LAN bridge before VM provisioning: %w", err)
-	}
-	if plan.Ready {
-		return nil
-	}
-	if plan.NeedsPrepare {
-		return e.prepareVMLANBridgeForRun(plan, nil)
-	}
-	return fmt.Errorf("resolve VM LAN bridge before VM provisioning: no usable bridge selected")
-}
-
-func (e *ttyExecer) prepareVMLANBridgeForRun(plan vmLANBridgePlan, cause error) error {
-	if os.Getenv("CATCH_PREPARE_VM_LAN_BRIDGE") == "1" {
-		return e.runVMLANBridgePrepareForRun()
-	}
-	if e.isPty && e.rw != nil {
-		ok, err := e.confirmVMLANBridgePrepareForRun(plan)
-		if err != nil {
-			return fmt.Errorf("confirm VM LAN bridge preparation before VM provisioning: %w", err)
-		}
-		if ok {
-			return e.runVMLANBridgePrepareForRun()
-		}
-	}
-	return vmLANBridgeProvisionArtifactsError(plan, cause)
-}
-
-func (e *ttyExecer) confirmVMLANBridgePrepareForRun(plan vmLANBridgePlan) (bool, error) {
-	bridge := strings.TrimSpace(plan.Bridge)
-	if bridge == "" {
-		bridge = "br0"
-	}
-	msg := fmt.Sprintf("Prepare %s for VM LAN networking?", bridge)
-	if e.bypassPtyInput && e.rawRW != nil {
-		return confirmRawLine(e.rawRW, e.rw, msg)
-	}
-	return cmdutil.Confirm(e.rw, e.rw, msg)
-}
-
-func (e *ttyExecer) runVMLANBridgePrepareForRun() error {
-	root := ""
-	if e.s != nil {
-		root = e.s.cfg.RootDir
-	}
-	status, err := prepareHostVMLANBridgeForRunFn(root)
-	if err != nil {
-		return fmt.Errorf("prepare VM LAN bridge before VM provisioning: %w", err)
-	}
-	if status.Phase != string(vmLANBridgePhaseReady) {
-		return fmt.Errorf("prepare VM LAN bridge before VM provisioning finished with phase %q: %w", status.Phase, errVMLANBridgePreparationRequired)
-	}
-	if err := e.vmProvisionContext().Err(); err != nil {
-		return fmt.Errorf("VM LAN bridge is ready, but the client disconnected before VM provisioning could continue; rerun `yeet run ... --net=lan`: %w", err)
-	}
-	return nil
-}
-
-func vmLANBridgeProvisionArtifactsError(plan vmLANBridgePlan, cause error) error {
-	cause = vmLANBridgePreparationCause(cause)
-	bridge := strings.TrimSpace(plan.Bridge)
-	parent := strings.TrimSpace(plan.Parent)
-	msg := "VM LAN bridge preparation is required before creating VM service artifacts"
-	switch {
-	case bridge != "" && parent != "":
-		return fmt.Errorf("%s for bridge %q from parent %q: %w", msg, bridge, parent, cause)
-	case bridge != "":
-		return fmt.Errorf("%s for bridge %q: %w", msg, bridge, cause)
-	case parent != "":
-		return fmt.Errorf("%s from parent %q: %w", msg, parent, cause)
-	default:
-		return fmt.Errorf("%s: %w", msg, cause)
-	}
+	_, err := resolveHostVMLANBridgeFn()
+	return err
 }
 
 type vmProvisionInputs struct {

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -45,6 +46,23 @@ func NewClient(host string, port int) *Client {
 		httpClient: &http.Client{},
 		wsDialer:   websocket.DefaultDialer,
 	}
+}
+
+// LocalSocket is the host administration endpoint on Yeet OS.
+const LocalSocket = "/run/yeet-admin/rpc.sock"
+
+func NewUnixClient(path string) *Client {
+	c := NewClient("localhost", 80)
+	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", path)
+	}
+	c.httpClient = &http.Client{Transport: &http.Transport{DialContext: dial}}
+	ws := *websocket.DefaultDialer
+	ws.Proxy = nil
+	ws.NetDialContext = dial
+	c.wsDialer = &ws
+	return c
 }
 
 func (c *Client) Call(ctx context.Context, method string, params any, out any) error {

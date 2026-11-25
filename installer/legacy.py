@@ -174,10 +174,6 @@ def inventory(dataset, *, read_units=False):
                         entry["problems"].append(f"Restore the VM file {file}.")
             entry["filesystems"] = sorted(origins)
             if name == "catch" and read_units:
-                entry["networkScripts"] = all(
-                    regular(src, directory / p)
-                    for p in ["data/yeet-ns", "data/yeet-ns.env"]
-                )
                 entry["catchName"] = ""
                 for line in (
                     entry.get("contents", {}).get("systemd.service", "").splitlines()
@@ -326,19 +322,14 @@ def adoption(dataset, hostname, host_id, enabled, engine=None, bridges=None):
         if n.startswith("yeet-") and n.endswith(("-ns.service", "-ts.service"))
     ]
     if helpers or any(r["kind"] == "vm" for r in report["workloads"]):
-        catch = next((r for r in report["workloads"] if r["name"] == "catch"), {})
-        if not catch.get("networkScripts"):
-            raise SetupError(
-                "Restore the original Yeet network scripts and their settings from backup."
-            )
         layout["migrationNetwork"] = True
-        layout["networkUnits"] = sorted([*helpers, "yeet-ns.service"])
+        layout["networkUnits"] = sorted(helpers)
         docker_helpers = [
             f"yeet-{name}-ns.service"
             for name in compose
             if f"yeet-{name}-ns.service" in units
         ]
-        units.update(network_units(report["data"], catch_root, units, docker_helpers))
+        units.update(network_units(report["data"], units, docker_helpers))
     volumes = sorted(
         {
             r["disk"].removeprefix("/dev/zvol/")

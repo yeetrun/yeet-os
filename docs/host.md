@@ -61,6 +61,12 @@ yeet run devbox vm://nixos/26.05
 yeet ssh devbox -- uname -a
 ```
 
+The installed host also includes the CLI. Sign in over SSH as root and run `yeet status` or `yeet restart web`. On Yeet OS, `localhost` selects the root-owned Unix socket at `/run/yeet-admin/rpc.sock`. Explicit host settings and project targets still apply. Use `yeet restart web@localhost` to select this machine explicitly.
+
+## Build the Yeet binaries
+
+From a Linux checkout, run `nix build ./yeet-nix#catch`. The output includes `result/bin/catch`, `result/bin/yeet`, and `result/bin/yeet-enroll`. The OS imports the fork’s package overlay and builds these same binaries with its pinned nixpkgs.
+
 ## Customize or update the host
 
 Import `nixosModules.default` into an existing NixOS flake and enable `services.yeet-host.enable`. To customize the distributed disk, extend the image configuration. For example, in a site flake next to this checkout:
@@ -82,6 +88,8 @@ Import `nixosModules.default` into an existing NixOS flake and enable `services.
 ```
 
 Build the customized disk with `nix build .#nixosConfigurations.apps.config.system.build.image`. For subsequent updates, keep that site flake available on the host or deployment machine and use `nixos-rebuild switch --flake .#apps`. A host rollback uses `nixos-rebuild switch --rollback`. Payload generations have their own `yeet service rollback <service>` command.
+
+On a fresh install, the installer configures `br0` when it can identify the wired uplink. The host gets its DHCP lease or static address on the bridge. For a custom host, set `services.yeet-host.lanUplink` to the physical interface, or set `services.yeet-host.lanBridge` to a bridge you already manage. Check the result with `catch vm-lan-bridge-status`. Each VM requesting `--net=lan` gets a TAP on that bridge when it starts. The NixOS configuration provides the shared service network, its DNS server, IP forwarding and Docker’s startup order. Yeet adds the network interfaces and unit dependencies specific to each payload as it starts.
 
 Yeet host data and app files live under `/var/lib/yeet`. Yeet writes workload units and their boot dependency links directly under `/var/lib/yeet-systemd`. The NixOS module adds this tree to systemd’s unit search path. A stopped, boot-enabled service starts again on reboot. A disabled service stays disabled even if you start it manually. Include both directories and any custom service roots or Docker volumes in host backups. For ZFS-backed service roots, enable ZFS in the site configuration, assign the host a stable `networking.hostId`, configure the pool for import at boot (for example with `boot.zfs.extraPools`), and provision the parent dataset before passing `--zfs`. [ZFS service roots and recovery points](../yeet-nix/website/docs/concepts/zfs.mdx)
 

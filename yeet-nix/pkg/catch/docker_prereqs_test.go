@@ -59,21 +59,7 @@ func TestDockerNetNSServiceUnitsSelectsCurrentDockerComposeNetNSUnits(t *testing
 	}
 }
 
-func TestDockerPrereqsTargetContentIncludesServiceNetNSUnits(t *testing.T) {
-	got := dockerPrereqsTargetContent([]string{"yeet-zeta-ns.service", "yeet-alpha-ns.service"})
-	for _, want := range []string{
-		"Description=Yeet Docker network prerequisites\n",
-		"Wants=catch.service yeet-ns.service yeet-alpha-ns.service yeet-zeta-ns.service\n",
-		"After=catch.service yeet-ns.service yeet-alpha-ns.service yeet-zeta-ns.service\n",
-		"Before=docker.service\n",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("target missing %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestDockerPrereqsInstallerWritesTargetAndDockerDropIn(t *testing.T) {
+func TestDockerPrereqsInstallerWritesPayloadDependencies(t *testing.T) {
 	root := t.TempDir()
 	var calls [][]string
 	installer := dockerPrereqsInstaller{
@@ -88,23 +74,16 @@ func TestDockerPrereqsInstallerWritesTargetAndDockerDropIn(t *testing.T) {
 		t.Fatalf("install returned error: %v", err)
 	}
 
-	targetRaw, err := os.ReadFile(filepath.Join(root, "etc/systemd/system/yeet-docker-prereqs.target"))
+	targetRaw, err := os.ReadFile(filepath.Join(root, "etc/systemd/system/yeet-docker-prereqs.target.d/payloads.conf"))
 	if err != nil {
 		t.Fatalf("read target returned error: %v", err)
 	}
-	if !strings.Contains(string(targetRaw), "Wants=catch.service yeet-ns.service yeet-media-ns.service\n") {
+	if !strings.Contains(string(targetRaw), "Wants=yeet-media-ns.service\nAfter=yeet-media-ns.service\n") {
 		t.Fatalf("target missing service unit:\n%s", string(targetRaw))
 	}
-	dropInRaw, err := os.ReadFile(filepath.Join(root, "etc/systemd/system/docker.service.d/yeet.conf"))
-	if err != nil {
-		t.Fatalf("read docker drop-in returned error: %v", err)
-	}
-	for _, want := range []string{
-		"Wants=yeet-docker-prereqs.target\n",
-		"After=yeet-docker-prereqs.target\n",
-	} {
-		if !strings.Contains(string(dropInRaw), want) {
-			t.Fatalf("drop-in missing %q:\n%s", want, string(dropInRaw))
+	for _, name := range []string{"yeet-docker-prereqs.target", "docker.service.d/yeet.conf"} {
+		if _, err := os.Stat(filepath.Join(root, "etc/systemd/system", name)); !os.IsNotExist(err) {
+			t.Errorf("unexpected host unit %s: %v", name, err)
 		}
 	}
 	if diff := cmp.Diff([][]string{{"daemon-reload"}}, calls); diff != "" {

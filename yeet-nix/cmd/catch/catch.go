@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/yeetrun/yeet/pkg/catch"
+	"github.com/yeetrun/yeet/pkg/catchrpc"
 	"github.com/yeetrun/yeet/pkg/cmdutil"
 	cdb "github.com/yeetrun/yeet/pkg/db"
 	"github.com/yeetrun/yeet/pkg/dnet"
@@ -41,6 +42,7 @@ const (
 )
 
 var (
+	localAdmin    = flag.Bool("local-admin", false, "serve local administration on the Yeet OS Unix socket")
 	legacyDataDir = flag.String("data-dir", defaultDataDir(), "data directory")
 	servicesRoot  = flag.String("services-root", "", "default root for service directories")
 	tsnetHost     = flag.String("tsnet-host", "catch", "hostname to use for tsnet")
@@ -63,18 +65,16 @@ var (
 	notifyISODNSContextFn = func(parent context.Context) (context.Context, context.CancelFunc) {
 		return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	}
-	exitProcess                             = os.Exit
-	setupDockerFn                           = setupDocker
-	setupVMHostFn                           = setupVMHost
-	doInstallFn                             = doInstall
-	validateCatchRuntimeFn                  = validateCatchRuntime
-	resolveCatchInstallZFSTargetFn          = catch.ResolveInstallZFSTarget
-	ensureVMNetworkFn                       = catch.EnsureVMNetwork
-	ensureISONetworkFn                      = catch.EnsureISONetworkBoundary
-	cleanISONetworkFn                       = catch.CleanISONetwork
-	ensureContainerdSnapshotterForInstallFn = ensureContainerdSnapshotterForInstall
-	generateCatchTailscaleAuthKeyFn         = catch.GenerateTailscaleAuthKeyFromSecret
-	writeCatchTailscaleClientSecretFn       = catch.WriteCatchTailscaleClientSecret
+	exitProcess = os.Exit
+
+	validateCatchRuntimeFn         = validateCatchRuntime
+	resolveCatchInstallZFSTargetFn = catch.ResolveInstallZFSTarget
+	ensureVMNetworkFn              = catch.EnsureVMNetwork
+	ensureISONetworkFn             = catch.EnsureISONetworkBoundary
+	cleanISONetworkFn              = catch.CleanISONetwork
+
+	generateCatchTailscaleAuthKeyFn   = catch.GenerateTailscaleAuthKeyFromSecret
+	writeCatchTailscaleClientSecretFn = catch.WriteCatchTailscaleClientSecret
 )
 
 const defaultDockerConfigPath = "/etc/docker/daemon.json"
@@ -366,35 +366,43 @@ func handleSpecialCommand(args []string, out io.Writer) (bool, error) {
 	case "netns-firewall":
 		return true, handleNetNSFirewallCommand(args[1:])
 	case "adapt-host-unit":
-		raw, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return true, err
-		}
-		unit, err := svc.AdaptHostUnit(string(raw))
-		if err != nil {
-			return true, err
-		}
-		_, err = io.WriteString(out, unit)
-		return true, err
+		return true, adaptHostUnit(os.Stdin, out)
 	case "vm-recovery-unit":
-		if len(args) != 3 {
-			return true, fmt.Errorf("vm-recovery-unit requires the original data and service roots")
-		}
-		var service cdb.Service
-		if err := json.NewDecoder(os.Stdin).Decode(&service); err != nil {
-			return true, err
-		}
-		unit, err := catch.RenderRecoveryVMUnit(args[1], args[2], &service)
-		if err != nil {
-			return true, err
-		}
-		_, err = io.WriteString(out, unit)
-		return true, err
+		return true, writeVMRecoveryUnit(args, os.Stdin, out)
 	case "vm-run":
 		return true, handleVMRunCommand(args[1:])
 	default:
 		return false, nil
 	}
+}
+
+func adaptHostUnit(in io.Reader, out io.Writer) error {
+	raw, err := io.ReadAll(in)
+	if err != nil {
+		return err
+	}
+	unit, err := svc.AdaptHostUnit(string(raw))
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(out, unit)
+	return err
+}
+
+func writeVMRecoveryUnit(args []string, in io.Reader, out io.Writer) error {
+	if len(args) != 3 {
+		return fmt.Errorf("vm-recovery-unit requires the original data and service roots")
+	}
+	var service cdb.Service
+	if err := json.NewDecoder(in).Decode(&service); err != nil {
+		return err
+	}
+	unit, err := catch.RenderRecoveryVMUnit(args[1], args[2], &service)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(out, unit)
+	return err
 }
 
 func handleVMRunCommand(args []string) error {
@@ -668,7 +676,7 @@ func handleLocalCommand(args []string, scfg *catch.Config, dataDir string, out i
 	if handled, err := handleSingleArgLocalCommand(args, scfg, dataDir, out); handled {
 		return true, err
 	}
-	return handleVMLANBridgeLocalCommand(args, scfg, dataDir, out)
+	return handleVMLANBridgeLocalCommand(args, out)
 }
 
 func handleISONetworkCommand(args []string, scfg *catch.Config) (bool, error) {
@@ -709,65 +717,28 @@ func handleSingleArgLocalCommand(args []string, scfg *catch.Config, dataDir stri
 		if len(args) != 1 {
 			return false, nil
 		}
-		return true, handleInstallCommand(scfg, dataDir)
+		return true, errors.New("use nixos-rebuild to install or update the Yeet OS host")
 	default:
 		return false, nil
 	}
 }
 
-func handleVMLANBridgeLocalCommand(args []string, scfg *catch.Config, dataDir string, out io.Writer) (bool, error) {
+func handleVMLANBridgeLocalCommand(args []string, out io.Writer) (bool, error) {
 	switch args[0] {
-	case "vm-lan-bridge-plan":
+	case "vm-lan-bridge-plan", "vm-lan-bridge-status":
 		if len(args) != 1 {
-			return true, fmt.Errorf("vm-lan-bridge-plan does not accept arguments")
+			return true, fmt.Errorf("%s does not accept arguments", args[0])
 		}
-		return true, handleVMLANBridgePlanCommand(scfg, dataDir, out)
-	case "vm-lan-bridge-status":
-		if len(args) != 1 {
-			return true, fmt.Errorf("vm-lan-bridge-status does not accept arguments")
+		bridge, err := catch.HostVMLANBridge()
+		if err != nil {
+			return true, err
 		}
-		return true, handleVMLANBridgeStatusCommand(scfg, dataDir, out)
+		return true, writeLine(out, "VM LAN bridge: "+bridge+" (managed by NixOS)")
 	case "vm-lan-bridge-prepare":
-		if len(args) > 2 {
-			return true, fmt.Errorf("vm-lan-bridge-prepare does not accept arguments except --yes")
-		}
-		if !slices.Contains(args[1:], "--yes") {
-			return true, fmt.Errorf("vm-lan-bridge-prepare --yes is required because this can momentarily change host networking")
-		}
-		return true, handleVMLANBridgePrepareCommand(scfg, dataDir, out)
+		return true, errors.New("configure services.yeet-host.lanUplink and rebuild Yeet OS")
 	default:
 		return false, nil
 	}
-}
-
-func handleVMLANBridgePlanCommand(_ *catch.Config, dataDir string, out io.Writer) error {
-	plan, err := catch.PlanVMLANBridge(dataDir)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(out, "VM LAN bridge plan: bridge=%s parent=%s ready=%t needs_prepare=%t reason=%s\n", plan.Bridge, plan.Parent, plan.Ready, plan.NeedsPrepare, plan.Reason)
-	return err
-}
-
-func handleVMLANBridgeStatusCommand(_ *catch.Config, dataDir string, out io.Writer) error {
-	status, ok, err := catch.ReadVMLANBridgePrepareStatus(dataDir)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return writeLine(out, "VM LAN bridge: no recorded status")
-	}
-	_, err = fmt.Fprintf(out, "VM LAN bridge: phase=%s bridge=%s parent=%s message=%s\n", status.Phase, status.Bridge, status.Parent, status.Message)
-	return err
-}
-
-func handleVMLANBridgePrepareCommand(_ *catch.Config, dataDir string, out io.Writer) error {
-	status, err := catch.PrepareVMLANBridge(dataDir, true)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(out, "VM LAN bridge: phase=%s bridge=%s parent=%s message=%s\n", status.Phase, status.Bridge, status.Parent, status.Message)
-	return err
 }
 
 func handleVMNetworkEnsureCommand(args []string, scfg *catch.Config) (bool, error) {
@@ -782,25 +753,6 @@ func handleVMNetworkEnsureCommand(args []string, scfg *catch.Config) (bool, erro
 		return true, fmt.Errorf("vm-network-ensure service is required")
 	}
 	return true, ensureVMNetworkFn(context.Background(), scfg, service)
-}
-
-func handleInstallCommand(scfg *catch.Config, dataDir string) error {
-	if _, err := os.Stat("/etc/yeet-os/managed"); err == nil {
-		return fmt.Errorf("use nixos-rebuild to update the Yeet OS host")
-	}
-	if err := setupDockerFn(); err != nil {
-		return fmt.Errorf("failed to set up docker: %w", err)
-	}
-	if err := ensureContainerdSnapshotterForInstallFn(defaultDockerConfigPath); err != nil {
-		return fmt.Errorf("failed to configure docker: %w", err)
-	}
-	if err := validateCatchRuntimeFn(*containerdSocket); err != nil {
-		return fmt.Errorf("failed to validate catch runtime prerequisites: %w", err)
-	}
-	if err := doInstallFn(scfg, dataDir); err != nil {
-		return fmt.Errorf("failed to install: %w", err)
-	}
-	return setupVMHostFn(dataDir)
 }
 
 func writeLine(out io.Writer, value string) error {
@@ -835,21 +787,26 @@ func runServer(dataDir string, scfg *catch.Config) {
 	defer logRemove(dockerPluginSock)
 	defer logClose("Docker network plugin listener", runtime.dockerPluginListener)
 	server := runtime.server
-	go func() {
-		if err := http.Serve(internalRegLn, server.RegistryHandler()); err != nil {
-			log.Fatalf("internal registry server error: %v", err)
-		}
-	}()
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/v2/", server.RegistryHandler())
-		if err := http.Serve(regln, mux); err != nil {
-			log.Fatalf("registry TLS server error: %v", err)
-		}
-	}()
+	go serveRegistry(internalRegLn, server.RegistryHandler())
+	registryMux := http.NewServeMux()
+	registryMux.Handle("/v2/", server.RegistryHandler())
+	go serveRegistry(regln, registryMux)
+
+	if *localAdmin {
+		// systemd creates /run/yeet-admin before startup and removes it on stop.
+		ln := must.Get(net.Listen("unix", catchrpc.LocalSocket))
+		must.Do(os.Chmod(catchrpc.LocalSocket, 0600))
+		go func() { must.Do(http.Serve(ln, server.RPCMux())) }()
+	}
 
 	// Run the RPC server in the foreground.
 	must.Do(http.Serve(rpcln, server.RPCMux()))
+}
+
+func serveRegistry(listener net.Listener, handler http.Handler) {
+	if err := http.Serve(listener, handler); err != nil {
+		log.Fatalf("registry server on %s: %v", listener.Addr(), err)
+	}
 }
 
 func mustAcquireCatchServerLock(dataDir string) *os.File {
@@ -1043,11 +1000,6 @@ type dockerSetupDeps struct {
 	scriptURL  string
 	httpClient httpDoer
 	runScript  func(string) error
-}
-
-// setupDocker checks if docker is installed and prompts the user to install it.
-func setupDocker() error {
-	return setupDockerWith(defaultDockerSetupDeps())
 }
 
 func defaultDockerSetupDeps() dockerSetupDeps {
@@ -1328,11 +1280,6 @@ type catchInstallPlan struct {
 	dataDir      string
 	servicesRoot string
 	tsnetHost    string
-}
-
-// doInstall installs the catch binary as a service.
-func doInstall(cfg *catch.Config, dataDir string) (err error) {
-	return doInstallWith(cfg, dataDir, defaultCatchInstallDeps())
 }
 
 func defaultCatchInstallDeps() catchInstallDeps {

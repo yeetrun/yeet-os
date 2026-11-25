@@ -2434,6 +2434,14 @@ func TestDetectInitHostUsesRemoteUname(t *testing.T) {
 	}
 }
 
+func TestInitRecognizesManagedYeetOSHost(t *testing.T) {
+	fakeSSHInPath(t, "echo yeet-os")
+	_, _, err := remoteHostOSAndArch("root@example.com")
+	if err == nil || !strings.Contains(err.Error(), "nixos-rebuild") {
+		t.Fatalf("expected NixOS update guidance, got %v", err)
+	}
+}
+
 func TestRemoteHostOSAndArchRejectsUnexpectedOutput(t *testing.T) {
 	fakeSSHInPath(t, "printf 'Linux\\n'\n")
 

@@ -724,6 +724,62 @@ func TestHostStorageCleanupCallsRPC(t *testing.T) {
 	}
 }
 
+func TestUnixClientUsesSocketForRPCAndExec(t *testing.T) {
+	t.Chdir(t.TempDir())
+	ln, err := net.Listen("unix", "rpc.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rpc", func(w http.ResponseWriter, r *http.Request) {
+		var req Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(Response{JSONRPC: "2.0", ID: req.ID, Result: "local"}); err != nil {
+			t.Error(err)
+		}
+	})
+	mux.HandleFunc("/rpc/exec", func(w http.ResponseWriter, r *http.Request) {
+		var upgrader websocket.Upgrader
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		var req ExecRequest
+		if err := conn.ReadJSON(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := conn.WriteJSON(ExecMessage{Type: ExecMsgExit, Code: 7}); err != nil {
+			t.Error(err)
+		}
+	})
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+	go func() {
+		if err := server.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+			t.Error(err)
+		}
+	}()
+	t.Cleanup(func() {
+		if err := server.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	client := NewUnixClient("rpc.sock")
+	var result string
+	if err := client.Call(t.Context(), "catch.Info", nil, &result); err != nil || result != "local" {
+		t.Fatalf("RPC returned %q, %v", result, err)
+	}
+	code, err := client.Exec(t.Context(), ExecRequest{}, nil, io.Discard, nil)
+	if err != nil || code != 7 {
+		t.Fatalf("Exec returned %d, %v", code, err)
+	}
+}
+
 func TestClientExec(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	var gotReq ExecRequest

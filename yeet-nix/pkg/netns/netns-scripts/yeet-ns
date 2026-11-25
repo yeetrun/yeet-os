@@ -9,7 +9,7 @@ HOST_IP="${HOST_IP:-192.168.100.1/32}"
 BRIDGE_IP="${BRIDGE_IP:-192.168.100.254/32}"
 YEET_IP="${YEET_IP:-192.168.100.2/32}"
 BRIDGE_IF="${BRIDGE_IF:-yeet0}"
-FIREWALL_BACKEND="${FIREWALL_BACKEND:-}"
+export RANGE HOST_IP BRIDGE_IF
 CATCH_BIN="${CATCH_BIN:-catch}"
 
 # Extract base IPs without subnet mask
@@ -50,8 +50,7 @@ ip netns exec yeet-ns ip route replace default via ${HOST_IP_BASE} dev br0
 
 ip route replace ${RANGE} dev ${BRIDGE_IF}
 
-# Enable IP forwarding
-sysctl -w net.ipv4.ip_forward=1
+# Host forwarding is declared in the NixOS module.
 ip netns exec yeet-ns sysctl -w net.ipv4.ip_forward=1
 
 # Ensure yeet-owned firewall state on the host using the backend-aware helper.

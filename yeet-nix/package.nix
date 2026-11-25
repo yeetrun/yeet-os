@@ -3,8 +3,8 @@ buildGo127Module {
   pname = "yeet-nix";
   version = "0.11.16-nix.1";
   src = lib.fileset.toSource {
-    root = ../yeet-nix;
-    fileset = lib.fileset.unions [ ../yeet-nix/cmd ../yeet-nix/pkg ../yeet-nix/go.mod ../yeet-nix/go.sum ../yeet-nix/README.md ../yeet-nix/website/docs ];
+    root = ./.;
+    fileset = lib.fileset.unions [ ./cmd ./pkg ./go.mod ./go.sum ./README.md ./website/docs ];
   };
   vendorHash = "sha256-lkA5qNE4CVrXK03g+Jbzllj5zE0d5b44kpJ1s6ErhxA=";
   subPackages = [ "cmd/catch" "cmd/yeet" "cmd/yeet-enroll" ];

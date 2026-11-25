@@ -39,8 +39,7 @@ var (
 )
 
 const (
-	defaultCatchHost = "catch"
-	defaultRPCPort   = 41548
+	defaultRPCPort = 41548
 )
 
 type clientConfig struct {
@@ -59,9 +58,19 @@ type legacyPrefsJSON struct {
 
 type prefs = clientConfig
 
+var defaultCatchHost = "catch"
+
 func init() {
+	if onYeetOS() {
+		defaultCatchHost = "localhost"
+	}
 	loadedPrefs.DefaultHost = defaultCatchHost
 	loadedPrefs.savedHost = defaultCatchHost
+}
+
+func onYeetOS() bool {
+	_, err := os.Stat("/etc/yeet-os/managed")
+	return err == nil
 }
 
 func defaultClientConfigPath() (string, error) {

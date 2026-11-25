@@ -38,6 +38,17 @@ yeet ssh -- curl -fsS http://127.0.0.1:8080/
 
 You can also point `yeet run` at a local script, a binary, or a Compose file. [Install the CLI](docs/install.md#deploy-a-payload) · [Payload reference](yeet-nix/website/docs/payloads/index.mdx)
 
+## Manage apps over SSH
+
+Yeet OS includes the CLI. SSH into your host and run:
+
+```sh
+yeet status
+yeet restart web
+```
+
+These commands use the local host by default. Use `sudo yeet` when signed in as a non-root administrator. From your laptop, keep using the host’s Tailscale name.
+
 ## Replace a boot disk
 
 If you keep Yeet’s host data and app files on separate ZFS data disks, you can replace the OS disk and bring the same Yeet host back. Shut down the old host, leave the data disks attached, and boot the installer. Choose **Recover an existing host**, import your pools, then select **Restore Yeet from my data disks**. The wizard shows which apps it found before you confirm the replacement disk.

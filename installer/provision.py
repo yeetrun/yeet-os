@@ -254,6 +254,18 @@ def discovery_interfaces(network, sysnet=Path("/sys/class/net")):
     return interfaces
 
 
+def lan_uplink(interfaces, sysnet=Path("/sys/class/net")):
+    wired = [nic for nic in interfaces if not (sysnet / nic / "wireless").exists()]
+    if len(wired) == 1:
+        return wired[0]
+    if wired:
+        routes = json.loads(run("ip", "-j", "-4", "route", "show", "default"))
+        uplinks = {route.get("dev") for route in routes}
+        if len(uplinks) == 1 and uplinks.issubset(wired):
+            return uplinks.pop()
+    return None
+
+
 def prepare_system(site, config, firmware):
     machine = machine_profile()
     layout = config.get("layout")
@@ -273,11 +285,17 @@ def prepare_system(site, config, firmware):
     site.mkdir(parents=True, exist_ok=True)
     shutil.copytree(os.environ["YEET_OS_SOURCE"], site / "yeet-os", symlinks=True)
     (site / "machine.json").write_text(json.dumps(machine))
-    (site / "layout.json").write_text(json.dumps(layout))
     lan = discovery_interfaces(machine["network"] if machine else {})
-    (site / "host.json").write_text(
-        json.dumps({"hostname": config["hostname"], "interfaces": lan})
-    )
+    host = {"hostname": config["hostname"], "interfaces": lan}
+    if not config.get("recover_dataset") and not (layout or {}).get("bridges"):
+        uplink = lan_uplink(lan)
+        if uplink and layout is not None:
+            # The existing recovery record preserves bridge-to-port mappings.
+            layout["bridges"] = {"br0": uplink}
+        elif uplink:
+            host["lanUplink"] = uplink
+    (site / "layout.json").write_text(json.dumps(layout))
+    (site / "host.json").write_text(json.dumps(host))
     (site / "flake.nix").write_text(
         '{ inputs.os.url = "path:./yeet-os";\n'
         "  outputs = { os, ... }: let machine = builtins.fromJSON (builtins.readFile ./machine.json);\n"

@@ -15,11 +15,13 @@ in {
     dhcpcd.enable = lib.mkForce false;
     useNetworkd = true;
   };
-  systemd.network.networks."10-yeet-uplink" = lib.mkIf static {
-    matchConfig = if mac != "" then { MACAddress = mac; } else { Name = net.interface or "yeet-pending"; };
-    address = [ net.address ];
-    routes = [ { Gateway = net.gateway; } ];
-    dns = net.dns;
-    networkConfig.DHCP = "no";
+  systemd.network.networks = lib.optionalAttrs static {
+    "10-yeet-uplink" = {
+      matchConfig = if mac != "" then { MACAddress = mac; } else { Name = net.interface or "yeet-pending"; };
+      address = [ net.address ];
+      routes = [ { Gateway = net.gateway; } ];
+      dns = net.dns;
+      networkConfig.DHCP = "no";
+    };
   };
 }

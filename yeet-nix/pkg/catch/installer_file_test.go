@@ -82,7 +82,8 @@ func task6CRunOrderedPreflight(t *testing.T, timerBacked bool) {
 	if err := os.WriteFile(resolver, []byte("nameserver 192.0.2.53\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	installer.lazyNetwork.MustSet(&networkConfig{ResolvConf: resolver})
+	installer.artifacts = map[db.ArtifactName]string{db.ArtifactNetNSResolv: resolver}
+	installer.lazyNetwork.MustSet(&networkConfig{ResolvConf: runtimeNetNSResolvConf("yeet-preflight-order-ns")})
 	var events []string
 	task6CSetOrderedPreflightSeams(t, installer, server, before, payload, resolver, &events)
 	if _, err := installer.Write([]byte(payload)); err != nil {
@@ -4249,9 +4250,6 @@ func TestPersistentCatchUnitsSurviveTransientInstallerRemoval(t *testing.T) {
 		catchSystemdUnitActive = previousActive
 		catchSystemctl = previousSystemctl
 	})
-	if err := installYeetDNSService(server.cfg.RootDir, stableRunner); err != nil {
-		t.Fatal(err)
-	}
 	if err := installISODNSService(server.cfg.RootDir, stableRunner); err != nil {
 		t.Fatal(err)
 	}
@@ -4275,7 +4273,6 @@ func TestPersistentCatchUnitsSurviveTransientInstallerRemoval(t *testing.T) {
 	}
 	for name, path := range map[string]string{
 		"catch.service":        catchFiles[db.ArtifactSystemdUnit],
-		"yeet-dns.service":     filepath.Join(systemdDir, "yeet-dns.service"),
 		"yeet-iso-dns.service": filepath.Join(systemdDir, "yeet-iso-dns.service"),
 		"iso network gate":     gateInstaller.artifacts[db.ArtifactNetNSService],
 	} {
@@ -6434,6 +6431,39 @@ func (r *isoInstallRecorder) Quarantine(ctx context.Context, cause error) error 
 		return nil
 	})
 	return err
+}
+
+func TestVerifyStagedNativeUnitResolvesFreshServiceNetwork(t *testing.T) {
+	dir := t.TempDir()
+	artifacts := make(map[db.ArtifactName]string)
+	files := map[db.ArtifactName]string{
+		db.ArtifactNetNSService: "network unit",
+		db.ArtifactTSService:    "Tailscale unit",
+		db.ArtifactSystemdUnit:  "payload unit",
+	}
+	for kind, contents := range files {
+		path := filepath.Join(dir, string(kind)+"-v1")
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		artifacts[kind] = path
+	}
+	i := FileInstaller{
+		cfg:       FileInstallerCfg{InstallerCfg: InstallerCfg{ServiceName: "app"}},
+		artifacts: artifacts,
+		verifyGeneratedSystemdUnitFunc: func(_ context.Context, path string) error {
+			for name, want := range map[string]string{"app.service": "payload unit", "yeet-app-ns.service": "network unit", "yeet-app-ts.service": "Tailscale unit"} {
+				got, err := os.ReadFile(filepath.Join(filepath.Dir(path), name))
+				if err != nil || string(got) != want {
+					t.Fatalf("verifying %s: %q, %v", name, got, err)
+				}
+			}
+			return nil
+		},
+	}
+	if err := i.verifyStagedNativeUnit(t.Context(), artifacts[db.ArtifactSystemdUnit]); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestVerifyStagedNativeUnitResolvesFreshISODependencies(t *testing.T) {

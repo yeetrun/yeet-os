@@ -1,8 +1,7 @@
 { writeShellScriptBin, lib, kbd, python3, qrencode, util-linux, coreutils, openssh
-, systemd, callPackage, extraInputs ? [], profiles ? {}, osSource ? null, nixpkgsSource ? null }:
+, systemd, yeet-nix, extraInputs ? [], profiles ? {}, osSource ? null, nixpkgsSource ? null }:
 let
-  yeet = callPackage ./package.nix {};
-  path = lib.makeBinPath ([ yeet kbd qrencode util-linux coreutils openssh systemd ] ++ extraInputs);
+  path = lib.makeBinPath ([ yeet-nix kbd qrencode util-linux coreutils openssh systemd ] ++ extraInputs);
 in writeShellScriptBin "yeet-setup" ''
   export PATH=${path}:$PATH
   ${lib.optionalString (profiles != {}) ''

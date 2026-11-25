@@ -144,10 +144,13 @@ func validateInitArgs(pos []string, opts initOptions) error {
 // host/IP. It uses SSH to run `uname -s` and `uname -m` on the remote host.
 // Note that this expects the remote host to be accessible via root@remote.
 func remoteHostOSAndArch(userAtRemote string) (system, goarch string, _ error) {
-	cmd := exec.Command("ssh", userAtRemote, "uname -s && uname -m")
+	cmd := exec.Command("ssh", userAtRemote, "if test -e /etc/yeet-os/managed; then echo yeet-os; else uname -s && uname -m; fi")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("SSH command failed: %w", err)
+	}
+	if strings.TrimSpace(string(output)) == "yeet-os" {
+		return "", "", errors.New("this host runs Yeet OS. Update it with nixos-rebuild")
 	}
 	// Split the output into system name and architecture
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")

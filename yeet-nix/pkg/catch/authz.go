@@ -7,6 +7,8 @@ package catch
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"slices"
 
 	"github.com/yeetrun/yeet/pkg/catchrpc"
@@ -124,6 +126,11 @@ func (s *Server) authorizeCaller(ctx context.Context, remoteAddr string, require
 		if err := s.checkTailscaleResolverMutationAllowed(); err != nil {
 			return err
 		}
+	}
+	// net/http sets this from the receiving listener. Request headers, peer
+	// addresses and loopback TCP cannot select the protected Unix endpoint.
+	if addr, ok := ctx.Value(http.LocalAddrContextKey).(*net.UnixAddr); ok && addr.Net == "unix" && addr.Name == catchrpc.LocalSocket {
+		return requirePermissions(newPermissionSet(permissionRead, permissionManage, permissionSSH), required...)
 	}
 	if s.cfg.AuthorizeFunc != nil {
 		return s.cfg.AuthorizeFunc(ctx, remoteAddr)

@@ -20,29 +20,15 @@ MACVLAN_MAC="${MACVLAN_MAC:-}"
 RESOLV_CONF="${RESOLV_CONF:-}"
 
 
-DHCP_AVAILABLE=true
-DHCP="dhcpcd --nohook resolv.conf"
-DHCP_RELEASE="dhcpcd --nohook resolv.conf -k"
-DHCP_PIDFILE="/var/run/dhclient-${SERVICE_NAME}-${MACVLAN_INTERFACE}.pid"
-DHCP_LEASEFILE="/var/lib/dhcp/dhclient-${SERVICE_NAME}-${MACVLAN_INTERFACE}.leases"
-DHCP_RESOLV_CONF_ENV=""
-if [ -n "$RESOLV_CONF" ]; then
-    DHCP_RESOLV_CONF_ENV="-e YEET_NETNS_RESOLV_CONF=${RESOLV_CONF}"
-fi
-
-if ! command -v dhcpcd &> /dev/null; then
-    if ! command -v dhclient &> /dev/null; then
-        DHCP_AVAILABLE=false
-    else
-        DHCP="dhclient -e YEET_NETNS_NAME=${NS_NAME} ${DHCP_RESOLV_CONF_ENV} -pf ${DHCP_PIDFILE} -lf ${DHCP_LEASEFILE}"
-        DHCP_RELEASE="dhclient -e YEET_NETNS_NAME=${NS_NAME} ${DHCP_RESOLV_CONF_ENV} -r -pf ${DHCP_PIDFILE} -lf ${DHCP_LEASEFILE}"
-    fi
-fi
-
 refresh_netns_resolv_conf() {
+    local resolver=/etc/resolv.conf
+    # The host's systemd-resolved loopback listener is outside this namespace.
+    if [ "$(readlink -f "$resolver")" = /run/systemd/resolve/stub-resolv.conf ]; then
+        resolver=/run/systemd/resolve/resolv.conf
+    fi
     mkdir -p "$NETNS_ETC_DIR/$NS_NAME"
-    if [ -r /etc/resolv.conf ]; then
-        cp /etc/resolv.conf "$NETNS_ETC_DIR/$NS_NAME/resolv.conf"
+    if [ -r "$resolver" ]; then
+        cp "$resolver" "$NETNS_ETC_DIR/$NS_NAME/resolv.conf"
     fi
 }
 
@@ -54,16 +40,8 @@ cleanup_netns_resolv_conf() {
 
 if [ "$1" == "cleanup" ]; then
     if [ -n "$MACVLAN_INTERFACE" ]; then
-        # Kill existing dhclient process if any
-        if [ -f "${DHCP_PIDFILE}" ]; then
-            kill $(cat "${DHCP_PIDFILE}") || true
-            rm -f "${DHCP_PIDFILE}"
-        fi
-        ip netns exec $NS_NAME ip link del $MACVLAN_INTERFACE || true
-        if $DHCP_AVAILABLE; then
-            refresh_netns_resolv_conf
-            ip netns exec $NS_NAME $DHCP_RELEASE $MACVLAN_INTERFACE || true
-        fi
+        ip netns exec "$NS_NAME" dhcpcd --nohook resolv.conf -k "$MACVLAN_INTERFACE" || true
+        ip netns exec "$NS_NAME" ip link del "$MACVLAN_INTERFACE" || true
     fi
     ip netns del $NS_NAME || true
     cleanup_netns_resolv_conf
@@ -74,10 +52,6 @@ fi
 ip netns del $NS_NAME || true
 ip netns add $NS_NAME
 
-# Prepare the namespace resolver path before DHCP starts. DHCP resolver updates
-# are redirected here by yeet's dhclient enter hook. If the host uses dhcpcd,
-# --nohook resolv.conf prevents host mutation, so refresh this seed on each
-# namespace setup instead of retaining stale resolver state.
 refresh_netns_resolv_conf
 
 # Bring up loopback in service-ns
@@ -134,9 +108,7 @@ if [ -n "$MACVLAN_PARENT" ] && [ -n "$MACVLAN_MAC" ]; then
     ip link set $MACVLAN_INTERFACE address $MACVLAN_MAC
     ip link set $MACVLAN_INTERFACE netns $NS_NAME
     ip netns exec $NS_NAME ip link set $MACVLAN_INTERFACE up
-    if $DHCP_AVAILABLE; then
-        ip netns exec $NS_NAME $DHCP $MACVLAN_INTERFACE
-    fi
+    ip netns exec "$NS_NAME" dhcpcd --nohook resolv.conf "$MACVLAN_INTERFACE"
 fi
 
 if [ -n "$TAILSCALE_TAP_INTERFACE" ]; then
@@ -150,9 +122,7 @@ if [ -n "$TAILSCALE_TAP_INTERFACE" ]; then
 
     # Configure it
     ip netns exec "$NS_NAME" ip link set "$TAILSCALE_TAP_INTERFACE" up
-    if $DHCP_AVAILABLE; then
-        ip netns exec "$NS_NAME" $DHCP "$TAILSCALE_TAP_INTERFACE"
-    fi
+    ip netns exec "$NS_NAME" dhcpcd --nohook resolv.conf "$TAILSCALE_TAP_INTERFACE"
 fi
 
 if [ -n "$RESOLV_CONF" ]; then

@@ -5,6 +5,8 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       each = nixpkgs.lib.genAttrs systems;
+      yeetOverlay = import ./yeet-nix/overlay.nix;
+      packagesModule.nixpkgs.overlays = [ yeetOverlay ];
       host = system: nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [ self.nixosModules.default ./nix/image.nix ];
@@ -22,6 +24,7 @@
             root = ./.;
             fileset = nixpkgs.lib.fileset.unions [
               ./flake.nix ./flake.lock ./nix ./installer ./yeet-nix/cmd ./yeet-nix/pkg
+              ./yeet-nix/flake.nix ./yeet-nix/flake.lock ./yeet-nix/overlay.nix ./yeet-nix/package.nix
               ./yeet-nix/go.mod ./yeet-nix/go.sum ./yeet-nix/README.md ./yeet-nix/website/docs
             ];
           };
@@ -30,7 +33,7 @@
             bios = installed machine "bios";
           };
         };
-        modules = [ ./nix/installer.nix ] ++ nixpkgs.lib.optional (machine != null) ./nix/machine.nix;
+        modules = [ packagesModule ./nix/installer.nix ] ++ nixpkgs.lib.optional (machine != null) ./nix/machine.nix;
       };
     in {
       lib = {
@@ -44,12 +47,10 @@
           exec ${pkgs.python3}/bin/python3 -B ${./installer}/prepare.py --source "path:${self.outPath}" "$@"
         '';
       in { prepare = { type = "app"; program = "${prepare}/bin/yeet-os-prepare"; }; });
-      nixosModules.default = import ./nix/host.nix;
+      nixosModules.default.imports = [ packagesModule ./nix/host.nix ];
       nixosConfigurations = each host // { yeet-uefi = installed null "uefi"; yeet-bios = installed null "bios"; };
-      packages = each (system: let
-        pkgs = nixpkgs.legacyPackages.${system};
-      in {
-        yeet-nix = pkgs.callPackage ./nix/package.nix { };
+      packages = each (system: {
+        yeet-nix = (nixpkgs.legacyPackages.${system}.extend yeetOverlay).yeet-nix;
         default = self.packages.${system}.yeet-nix;
         image = (host system).config.system.build.image;
       } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {

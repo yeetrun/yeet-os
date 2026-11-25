@@ -582,8 +582,8 @@ func TestVMLANNetworkPlanUsesParentBridgeWhenAvailable(t *testing.T) {
 func TestResolveVMLANNetworkInputUsesPreparedHostBridge(t *testing.T) {
 	oldResolve := resolveHostVMLANBridgeFn
 	t.Cleanup(func() { resolveHostVMLANBridgeFn = oldResolve })
-	resolveHostVMLANBridgeFn = func() (vmLANBridgePlan, error) {
-		return vmLANBridgePlan{Ready: true, Bridge: "br0", Parent: "eno1"}, nil
+	resolveHostVMLANBridgeFn = func() (string, error) {
+		return "br0", nil
 	}
 
 	input := vmNetworkInputs{}
@@ -598,8 +598,8 @@ func TestResolveVMLANNetworkInputUsesPreparedHostBridge(t *testing.T) {
 func TestResolveVMLANNetworkInputFailsBeforeArtifactsWhenBridgeMissing(t *testing.T) {
 	oldResolve := resolveHostVMLANBridgeFn
 	t.Cleanup(func() { resolveHostVMLANBridgeFn = oldResolve })
-	resolveHostVMLANBridgeFn = func() (vmLANBridgePlan, error) {
-		return vmLANBridgePlan{NeedsPrepare: true, Bridge: "br0", Parent: "eno1"}, errVMLANBridgePreparationRequired
+	resolveHostVMLANBridgeFn = func() (string, error) {
+		return "", errVMLANBridgePreparationRequired
 	}
 
 	input := vmNetworkInputs{}
@@ -618,8 +618,8 @@ func TestVMLANNetworkPlanBuildsTaggedVLANBridge(t *testing.T) {
 		vmLANBridgeUplinkFn = oldBridgeUplink
 		vmLANExistingVLANBridgeFn = oldExistingVLANBridge
 	})
-	resolveHostVMLANBridgeFn = func() (vmLANBridgePlan, error) {
-		return vmLANBridgePlan{Ready: true, Bridge: "br0", Parent: "eth0"}, nil
+	resolveHostVMLANBridgeFn = func() (string, error) {
+		return "br0", nil
 	}
 	vmLANBridgeUplinkFn = func(parent string) (string, error) {
 		if parent != "br0" {
@@ -733,8 +733,8 @@ func TestVMLANNetworkPlanUsesBridgeUplinkForVLANParent(t *testing.T) {
 		vmLANBridgeUplinkFn = oldBridgeUplink
 		vmLANExistingVLANBridgeFn = oldExistingVLANBridge
 	})
-	resolveHostVMLANBridgeFn = func() (vmLANBridgePlan, error) {
-		return vmLANBridgePlan{Ready: true, Bridge: "br0", Parent: "eno1"}, nil
+	resolveHostVMLANBridgeFn = func() (string, error) {
+		return "br0", nil
 	}
 	vmLANBridgeUplinkFn = func(parent string) (string, error) {
 		if parent != "br0" {
@@ -775,8 +775,8 @@ func TestVMLANNetworkPlanUsesExistingVLANBridge(t *testing.T) {
 		vmLANBridgeUplinkFn = oldBridgeUplink
 		vmLANExistingVLANBridgeFn = oldExistingVLANBridge
 	})
-	resolveHostVMLANBridgeFn = func() (vmLANBridgePlan, error) {
-		return vmLANBridgePlan{Ready: true, Bridge: "br0", Parent: "eno1"}, nil
+	resolveHostVMLANBridgeFn = func() (string, error) {
+		return "br0", nil
 	}
 	vmLANBridgeUplinkFn = func(string) (string, error) {
 		return "eno1", nil
@@ -1863,7 +1863,7 @@ func TestEnsureVMNetworkRejectsDBBackedNonBridgeLANParent(t *testing.T) {
 	t.Cleanup(func() { vmNetworkReconcileRunner = oldRunner })
 
 	err := server.EnsureVMNetwork(context.Background(), "badlan")
-	want := `VM LAN network parent "eth0" is not a bridge; prepare a host bridge with`
+	want := `VM LAN network parent "eth0" is not a bridge; select an existing NixOS bridge`
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("EnsureVMNetwork error = %v, want %q", err, want)
 	}
@@ -2037,8 +2037,8 @@ func TestVMNetworkUnsupportedLANIsExplicit(t *testing.T) {
 	if err := plan.ExecuteSetup(func([]string) error {
 		t.Fatal("runner should not be called for unsupported LAN parent")
 		return nil
-	}); err == nil || !strings.Contains(err.Error(), "prepare a host bridge with") {
-		t.Fatalf("ExecuteSetup error = %v, want host bridge preparation guidance", err)
+	}); err == nil || !strings.Contains(err.Error(), "select an existing NixOS bridge") {
+		t.Fatalf("ExecuteSetup error = %v, want NixOS bridge guidance", err)
 	}
 
 	cmds := plan.SetupCommands()

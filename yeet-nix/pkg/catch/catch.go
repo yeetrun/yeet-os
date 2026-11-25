@@ -29,7 +29,6 @@ import (
 	"github.com/yeetrun/yeet/pkg/db"
 	"github.com/yeetrun/yeet/pkg/dnet"
 	"github.com/yeetrun/yeet/pkg/iso"
-	"github.com/yeetrun/yeet/pkg/netns"
 	"github.com/yeetrun/yeet/pkg/registry"
 	"github.com/yeetrun/yeet/pkg/svc"
 	"tailscale.com/client/local"
@@ -56,8 +55,8 @@ var serverVMStatusFunc = func(name string) (svc.Status, error) {
 	return runner.Status()
 }
 
-var installYeetNSService = netns.InstallYeetNSService
-var installYeetDNSServiceForServer = installYeetDNSService
+var checkYeetNSService = func() error { return catchSystemctl("is-active", "--quiet", "yeet-ns.service") }
+var checkYeetDNSService = func() error { return catchSystemctl("is-active", "--quiet", "yeet-dns.service") }
 var installISODNSServiceForServer = installISODNSService
 var waitDockerReadyForISOForServer = waitDockerReadyForISO
 var reconcileISONetworksForServer = func(ctx context.Context, s *Server) error {
@@ -333,11 +332,11 @@ func (s *Server) prepareNetworkRuntimeAllowed(ctx context.Context) error {
 		}
 		return errors.Join(cause, failClosedISONetworksForServer(ctx, s, cause))
 	}
-	if err := installYeetNSService(s.catchRunnerPath()); err != nil {
-		return failPrerequisite(fmt.Errorf("install bridge service: %w", err))
+	if err := checkYeetNSService(); err != nil {
+		return failPrerequisite(fmt.Errorf("check host network service: %w", err))
 	}
-	if err := installYeetDNSServiceForServer(s.cfg.RootDir, s.catchRunnerPath()); err != nil {
-		return failPrerequisite(fmt.Errorf("install DNS service: %w", err))
+	if err := checkYeetDNSService(); err != nil {
+		return failPrerequisite(fmt.Errorf("check host DNS service: %w", err))
 	}
 	if err := installDockerPrereqs(s); err != nil {
 		return failPrerequisite(fmt.Errorf("install Docker prerequisites: %w", err))

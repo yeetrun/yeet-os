@@ -24,11 +24,12 @@ in {
   networking.bridges = lib.mapAttrs (_: nic: { interfaces = [ nic ]; }) bridges;
   networking.interfaces = (lib.mapAttrs (name: _: { useDHCP = !static; }) bridges)
     // lib.genAttrs (builtins.attrValues bridges) (_: { useDHCP = false; });
-  systemd.network.networks."10-yeet-uplink".matchConfig = lib.mkIf movedStatic
-    (lib.mkForce { Name = builtins.head (builtins.attrNames staticBridges); });
+  systemd.network.networks = lib.optionalAttrs movedStatic {
+    "10-yeet-uplink".matchConfig = lib.mkForce { Name = builtins.head (builtins.attrNames staticBridges); };
+  };
   # The launcher and shared helpers may be needed before Catch refreshes them at boot.
   systemd.tmpfiles.rules = lib.optional helperBoot
-    "C /var/lib/yeet-host/run/catch 0755 root root - ${pkgs.callPackage ./package.nix {}}/bin/catch";
+    "C /var/lib/yeet-host/run/catch 0755 root root - ${pkgs.yeet-nix}/bin/catch";
   users.users.yeet-svc.uid = lib.mkIf (layout ? serviceUid) layout.serviceUid;
   users.groups.yeet-svc.gid = lib.mkIf (layout ? serviceGid) layout.serviceGid;
   # Keep the engine metadata, named volumes and image layers with the host

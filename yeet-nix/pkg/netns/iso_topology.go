@@ -142,7 +142,6 @@ func ISOTopologyEnsureCommands(spec ISOTopologySpec) ([]ISOCommand, error) {
 		ISOCommand{Name: "ip", Args: []string{"address", "replace", hostCIDR, "dev", allocation.Interface}},
 		ISOCommand{Name: "ip", Args: []string{"link", "set", allocation.Interface, "up"}},
 		ISOCommand{Name: "udevadm", Args: []string{"settle", "--timeout=10"}},
-		ISOCommand{Name: "sysctl", Args: []string{"-w", "net.ipv4.ip_forward=1"}},
 		ISOCommand{Name: "sysctl", Args: []string{"-w", "net.ipv4.conf." + allocation.Interface + ".forwarding=1"}},
 		ISOCommand{Name: "sysctl", Args: []string{"-w", "net.ipv4.conf." + allocation.Interface + ".rp_filter=1"}},
 		ISOCommand{Name: "sysctl", Args: []string{"-w", "net.ipv4.conf." + allocation.Interface + ".accept_local=0"}},

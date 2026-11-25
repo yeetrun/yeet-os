@@ -48,6 +48,8 @@ def payload_units(row, catch_root):
                     and re.fullmatch(r"catch-[0-9]+", program.name)
                 ):
                     value = value.replace(str(program), RUNNER, 1)
+                elif program == Path(catch_root, "data/service-ns"):
+                    value = value.replace(str(program), "/etc/yeet-os/service-ns", 1)
                 elif program == Path(RUNNER):
                     pass
                 elif (
@@ -56,7 +58,7 @@ def payload_units(row, catch_root):
                 ):
                     pass
                 elif not program.is_relative_to(root) and program not in (
-                    Path(catch_root, "data/service-ns"),
+                    Path("/etc/yeet-os/service-ns"),
                     Path("/bin/systemctl"),
                     Path("/usr/bin/test"),
                 ):
@@ -80,19 +82,8 @@ def payload_units(row, catch_root):
     return result
 
 
-def network_units(data, catch_root, units, docker_helpers):
-    result = {
-        "yeet-ns.service": f"""[Unit]
-Description=Yeet host network
-Before=yeet-docker-prereqs.target docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-EnvironmentFile={catch_root}/data/yeet-ns.env
-ExecStart=/usr/bin/env CATCH_BIN={RUNNER} {catch_root}/data/yeet-ns
-""",
-    }
+def network_units(data, units, docker_helpers):
+    result = {}
     if any("yeet-iso-dns.service" in unit for unit in units.values()):
         result["yeet-iso-dns.service"] = f"""[Unit]
 Requires=yeet-ns.service
@@ -103,11 +94,8 @@ ExecStart={RUNNER} -data-dir {data} iso-dns
 Restart=on-failure
 """
     if docker_helpers:
-        after = " ".join(["catch.service", "yeet-ns.service", *sorted(docker_helpers)])
-        result["yeet-docker-prereqs.target"] = (
-            f"[Unit]\nWants={after}\nAfter={after}\nBefore=docker.service\n"
-        )
-        result["docker.service.d/yeet.conf"] = (
-            "[Unit]\nWants=yeet-docker-prereqs.target\nAfter=yeet-docker-prereqs.target\n"
+        deps = " ".join(sorted(docker_helpers))
+        result["yeet-docker-prereqs.target.d/payloads.conf"] = (
+            f"[Unit]\nWants={deps}\nAfter={deps}\n"
         )
     return result

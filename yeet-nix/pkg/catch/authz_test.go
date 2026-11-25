@@ -7,6 +7,8 @@ package catch
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -87,6 +89,25 @@ func TestRequirePermissionsReportsFirstMissing(t *testing.T) {
 	err = requirePermissions(perms, permissionRead, permissionManage, permissionSSH)
 	if err == nil || !strings.Contains(err.Error(), `"ssh"`) {
 		t.Fatalf("requirePermissions error = %v, want missing ssh", err)
+	}
+}
+
+func TestLocalAdminUsesOnlyPrivateListener(t *testing.T) {
+	server := newTestServer(t)
+	server.cfg.AuthorizeFunc = func(context.Context, string) error { return errUnauthorized }
+	for _, tc := range []struct {
+		addr  net.Addr
+		allow bool
+	}{
+		{&net.UnixAddr{Name: catchrpc.LocalSocket, Net: "unix"}, true},
+		{&net.UnixAddr{Name: "/tmp/other.sock", Net: "unix"}, false},
+		{&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 41548}, false},
+	} {
+		ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, tc.addr)
+		err := server.authorizeCaller(ctx, catchrpc.LocalSocket, permissionRead, permissionManage, permissionSSH)
+		if (err == nil) != tc.allow {
+			t.Errorf("listener %v: got %v, want allow=%t", tc.addr, err, tc.allow)
+		}
 	}
 }
 

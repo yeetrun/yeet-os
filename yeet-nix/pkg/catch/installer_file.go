@@ -987,9 +987,11 @@ func (i *FileInstaller) writeBaseNetworkConfig(env *netns.Service) error {
 		return err
 	}
 	if resolvConf := netNSResolvConfFor(env, tailscaleResolvConf); resolvConf != "" {
-		if err := i.writeNetNSResolvConf(env, resolvConf); err != nil {
+		path, err := i.writeNetNSResolvConf(resolvConf)
+		if err != nil {
 			return err
 		}
+		env.ResolvConf = path
 	}
 	return i.writeServiceNetNSFiles(*env)
 }
@@ -1075,14 +1077,13 @@ func validateISOTailscaleAllocation(service string, allocation *db.ISOAllocation
 	return nil
 }
 
-func (i *FileInstaller) writeNetNSResolvConf(env *netns.Service, resolvConf string) error {
+func (i *FileInstaller) writeNetNSResolvConf(resolvConf string) (string, error) {
 	fp := filepath.Join(i.serviceBinDir(), fileutil.ApplyVersion("resolv.conf"))
 	if err := os.WriteFile(fp, []byte(resolvConf), 0644); err != nil {
-		return fmt.Errorf("failed to write resolv.conf: %v", err)
+		return "", fmt.Errorf("failed to write resolv.conf: %w", err)
 	}
 	mak.Set(&i.artifacts, db.ArtifactNetNSResolv, fp)
-	env.ResolvConf = fp
-	return nil
+	return fp, nil
 }
 
 func netNSResolvConfFor(env *netns.Service, tailscaleResolvConf string) string {
@@ -1615,8 +1616,9 @@ func (i *FileInstaller) applyNetworkToSystemdUnit(su *svc.SystemdUnit) error {
 	}
 	su.NetNS = n.NetNS
 	su.Requires = strings.Join(n.Deps, " ")
-	if n.ResolvConf != "" {
-		su.ResolvConf = n.ResolvConf
+	su.ResolvConf = n.ResolvConf
+	if path := i.artifacts[db.ArtifactNetNSResolv]; i.resolvedSandbox.State == "on" && path != "" {
+		su.ResolvConf = path
 	}
 	return nil
 }
@@ -2004,30 +2006,39 @@ func (i *FileInstaller) renderProbeAndVerifyNativeSandbox(ctx context.Context, p
 	return nil
 }
 
-// A fresh ISO gate has a versioned artifact name until activation. Verify
-// the staged units together under their final names, outside the live manager.
+// Verify the staged units under the names systemd will use after activation.
 func (i *FileInstaller) verifyStagedNativeUnit(ctx context.Context, unitPath string) error {
 	gate := i.artifacts[db.ArtifactNetNSService]
-	if gate == "" || i.isoAllocation == nil {
+	if gate == "" {
 		return i.verifyGeneratedSystemdUnitFunc(ctx, unitPath)
 	}
-	dns, destination, cleanup, err := renderISODNSServiceUnit(i.s.cfg.RootDir, i.s.catchRunnerPath())
+	dir, err := os.MkdirTemp("", "yeet-verify-units-*")
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-	dir := filepath.Dir(dns)
-	if err := os.Rename(dns, filepath.Join(dir, filepath.Base(destination))); err != nil {
-		return err
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("clean up staged units: %v", err)
+		}
+	}()
+	units := map[string]string{i.cfg.ServiceName + ".service": unitPath, serviceNetNSUnitName(i.cfg.ServiceName): gate}
+	if ts := i.artifacts[db.ArtifactTSService]; ts != "" {
+		units["yeet-"+i.cfg.ServiceName+"-ts.service"] = ts
 	}
-	if err := fileutil.CopyFile(gate, filepath.Join(dir, serviceNetNSUnitName(i.cfg.ServiceName))); err != nil {
-		return err
+	if i.isoAllocation != nil {
+		dns, destination, cleanup, err := renderISODNSServiceUnit(i.s.cfg.RootDir, i.s.catchRunnerPath())
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		units[filepath.Base(destination)] = dns
 	}
-	mainUnit := filepath.Join(dir, i.cfg.ServiceName+".service")
-	if err := fileutil.CopyFile(unitPath, mainUnit); err != nil {
-		return err
+	for name, source := range units {
+		if err := fileutil.CopyFile(source, filepath.Join(dir, name)); err != nil {
+			return err
+		}
 	}
-	return i.verifyGeneratedSystemdUnitFunc(ctx, mainUnit)
+	return i.verifyGeneratedSystemdUnitFunc(ctx, filepath.Join(dir, i.cfg.ServiceName+".service"))
 }
 
 func buildValidatedServiceSandboxPlan(request serviceSandboxPlanRequest) (serviceSandboxPlan, error) {
@@ -2049,12 +2060,26 @@ func (i *FileInstaller) prepareNativeSandboxResolver() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("prepare native sandbox network: %w", err)
 	}
-	resolver := "/etc/resolv.conf"
-	if network != nil && strings.TrimSpace(network.ResolvConf) != "" {
-		resolver = network.ResolvConf
+	if network == nil {
+		return "/etc/resolv.conf", nil
 	}
-	i.sandboxResolver = resolver
-	return resolver, nil
+	// Restart and rollback validate the resolver belonging to this generation.
+	// Its namespace's runtime copy does not exist during a fresh deployment.
+	if resolver := i.artifacts[db.ArtifactNetNSResolv]; resolver != "" {
+		return resolver, nil
+	}
+	source, err := filepath.EvalSymlinks("/etc/resolv.conf")
+	if err != nil {
+		return "", err
+	}
+	if source == "/run/systemd/resolve/stub-resolv.conf" {
+		source = "/run/systemd/resolve/resolv.conf"
+	}
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		return "", fmt.Errorf("read host resolver for native sandbox: %w", err)
+	}
+	return i.writeNetNSResolvConf(string(contents))
 }
 
 func (i *FileInstaller) withRegularServiceNetworkAllocationLock(run func() error) error {

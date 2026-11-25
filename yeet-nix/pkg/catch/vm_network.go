@@ -30,8 +30,8 @@ const (
 	vmSvcNSBridge      = "br0"
 )
 
-var errVMLANBridgePreparationRequired = errors.New("VM LAN bridge preparation required")
-var resolveHostVMLANBridgeFn = resolveHostVMLANBridge
+var errVMLANBridgePreparationRequired = errors.New("configure services.yeet-host.lanUplink or services.yeet-host.lanBridge and rebuild Yeet OS")
+var resolveHostVMLANBridgeFn = HostVMLANBridge
 
 type vmNetworkInputs struct {
 	ServiceIP         string
@@ -367,71 +367,29 @@ func resolveVMLANNetworkInput(input *vmNetworkInputs) error {
 }
 
 func resolveDefaultVMLANParent(input *vmNetworkInputs) error {
-	plan, err := resolveHostVMLANBridgeFn()
+	bridge, err := resolveHostVMLANBridgeFn()
 	if err != nil {
-		if plan.NeedsPrepare || errors.Is(err, errVMLANBridgePreparationRequired) {
-			return vmLANBridgePreparationRequiredError(plan, err)
-		}
-		return fmt.Errorf("resolve VM LAN bridge: %w", err)
+		return err
 	}
-	if plan.Ready {
-		bridge := strings.TrimSpace(plan.Bridge)
-		if bridge == "" {
-			return fmt.Errorf("resolve VM LAN bridge: ready plan did not select a bridge")
-		}
-		input.LANParent = bridge
-		input.LANParentIsBridge = true
-		return nil
-	}
-	if plan.NeedsPrepare {
-		return vmLANBridgePreparationRequiredError(plan, nil)
-	}
-	return fmt.Errorf("resolve VM LAN bridge: no usable bridge selected")
+	input.LANParent = bridge
+	input.LANParentIsBridge = true
+	return nil
 }
 
-func resolveHostVMLANBridge() (vmLANBridgePlan, error) {
-	plan, err := PlanVMLANBridge("")
+// HostVMLANBridge reports the live bridge selected by the NixOS configuration.
+func HostVMLANBridge() (string, error) {
+	data, err := os.ReadFile("/etc/yeet-os/vm-lan-bridge")
+	if errors.Is(err, os.ErrNotExist) {
+		return "", errVMLANBridgePreparationRequired
+	}
 	if err != nil {
-		return vmLANBridgePlan{}, err
+		return "", err
 	}
-	return vmLANBridgePlan{
-		Ready:        plan.Ready,
-		NeedsPrepare: plan.NeedsPrepare,
-		Bridge:       plan.Bridge,
-		Parent:       plan.Parent,
-		Renderer: vmLANRenderer{
-			Name:      plan.Renderer.Name,
-			Supported: plan.Renderer.Supported,
-			Reason:    plan.Renderer.Reason,
-		},
-		Reason: plan.Reason,
-	}, nil
-}
-
-func vmLANBridgePreparationRequiredError(plan vmLANBridgePlan, cause error) error {
-	cause = vmLANBridgePreparationCause(cause)
-	bridge := strings.TrimSpace(plan.Bridge)
-	parent := strings.TrimSpace(plan.Parent)
-	switch {
-	case bridge != "" && parent != "":
-		return fmt.Errorf("VM LAN bridge preparation required for bridge %q from parent %q: %w", bridge, parent, cause)
-	case bridge != "":
-		return fmt.Errorf("VM LAN bridge preparation required for bridge %q: %w", bridge, cause)
-	case parent != "":
-		return fmt.Errorf("VM LAN bridge preparation required from parent %q: %w", parent, cause)
-	default:
-		return fmt.Errorf("VM LAN bridge preparation required: %w", cause)
+	bridge := strings.TrimSpace(string(data))
+	if !vmLANLiveBridgeExists(bridge) {
+		return "", fmt.Errorf("configured VM LAN bridge %q is unavailable: %w", bridge, errVMLANBridgePreparationRequired)
 	}
-}
-
-func vmLANBridgePreparationCause(cause error) error {
-	if cause == nil {
-		return errVMLANBridgePreparationRequired
-	}
-	if errors.Is(cause, errVMLANBridgePreparationRequired) {
-		return cause
-	}
-	return errors.Join(errVMLANBridgePreparationRequired, cause)
+	return bridge, nil
 }
 
 func vmLANVLANParentAndBridge(parent string, vlan int) (string, string, error) {
@@ -891,9 +849,9 @@ func validateVMLANNetworkInterface(iface vmNetworkInterfacePlan) error {
 		return nil
 	}
 	if iface.Parent == "" {
-		return fmt.Errorf("VM LAN network parent is required; prepare a host bridge with `yeet init` or run `yeet run ... --net=lan` interactively so yeet can prepare one")
+		return fmt.Errorf("VM LAN network parent is required; configure a NixOS bridge and rebuild the host")
 	}
-	return fmt.Errorf("VM LAN network parent %q is not a bridge; prepare a host bridge with `yeet init` or recreate/update the VM with `yeet run ... --net=lan` interactively so yeet can prepare one", iface.Parent)
+	return fmt.Errorf("VM LAN network parent %q is not a bridge; select an existing NixOS bridge", iface.Parent)
 }
 
 func runVMNetworkCommands(run vmNetworkCommandRunner, cmds [][]string, mode vmNetworkCommandMode) error {

@@ -373,42 +373,12 @@ func TestHandleLocalCommandVMNetworkEnsureRequiresService(t *testing.T) {
 	}
 }
 
-func TestHandleLocalCommandVMLANBridgeStatus(t *testing.T) {
-	var out bytes.Buffer
-	cfg := &catch.Config{RootDir: t.TempDir()}
-	handled, err := handleLocalCommand([]string{"vm-lan-bridge-status"}, cfg, cfg.RootDir, &out)
-	if err != nil {
-		t.Fatalf("handleLocalCommand vm-lan-bridge-status: %v", err)
-	}
-	if !handled {
-		t.Fatal("vm-lan-bridge-status was not handled")
-	}
-	if !strings.Contains(out.String(), "VM LAN bridge") {
-		t.Fatalf("output = %q, want VM LAN bridge summary", out.String())
-	}
-}
-
-func TestHandleLocalCommandVMLANBridgePrepareRequiresYes(t *testing.T) {
-	var out bytes.Buffer
-	cfg := &catch.Config{RootDir: t.TempDir()}
-	handled, err := handleLocalCommand([]string{"vm-lan-bridge-prepare"}, cfg, cfg.RootDir, &out)
-	if err == nil || !strings.Contains(err.Error(), "--yes is required") {
-		t.Fatalf("error = %v, want --yes is required", err)
-	}
-	if !handled {
-		t.Fatal("vm-lan-bridge-prepare was not handled")
-	}
-}
-
-func TestHandleLocalCommandVMLANBridgePrepareRejectsExtraArgs(t *testing.T) {
-	var out bytes.Buffer
-	cfg := &catch.Config{RootDir: t.TempDir()}
-	handled, err := handleLocalCommand([]string{"vm-lan-bridge-prepare", "--yes", "extra"}, cfg, cfg.RootDir, &out)
-	if err == nil || !strings.Contains(err.Error(), "does not accept arguments") {
-		t.Fatalf("error = %v, want extra arg rejection", err)
-	}
-	if !handled {
-		t.Fatal("vm-lan-bridge-prepare was not handled")
+func TestHostProvisioningCommandsDeferToNixOS(t *testing.T) {
+	for _, args := range [][]string{{"install"}, {"vm-lan-bridge-prepare", "--yes"}} {
+		handled, err := handleLocalCommand(args, &catch.Config{}, t.TempDir(), io.Discard)
+		if !handled || err == nil || !strings.Contains(err.Error(), "rebuild") {
+			t.Fatalf("%v: handled=%v err=%v", args, handled, err)
+		}
 	}
 }
 
@@ -550,55 +520,6 @@ func TestRunCatchProcessReturnsRuntimeValidationError(t *testing.T) {
 	err := runCatchProcess(nil, io.Discard)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("runCatchProcess error = %v, want %v", err, wantErr)
-	}
-}
-
-func TestHandleLocalCommandInstallPreparesRuntimeBeforeInstallingService(t *testing.T) {
-	oldSetupDocker := setupDockerFn
-	oldEnsureSnapshotter := ensureContainerdSnapshotterForInstallFn
-	oldValidateRuntime := validateCatchRuntimeFn
-	oldDoInstall := doInstallFn
-	oldSetupVMHost := setupVMHostFn
-	t.Cleanup(func() {
-		setupDockerFn = oldSetupDocker
-		ensureContainerdSnapshotterForInstallFn = oldEnsureSnapshotter
-		validateCatchRuntimeFn = oldValidateRuntime
-		doInstallFn = oldDoInstall
-		setupVMHostFn = oldSetupVMHost
-	})
-
-	var order []string
-	setupDockerFn = func() error {
-		order = append(order, "docker")
-		return nil
-	}
-	ensureContainerdSnapshotterForInstallFn = func(string) error {
-		order = append(order, "snapshotter")
-		return nil
-	}
-	validateCatchRuntimeFn = func(string) error {
-		order = append(order, "runtime")
-		return nil
-	}
-	doInstallFn = func(*catch.Config, string) error {
-		order = append(order, "install")
-		return nil
-	}
-	setupVMHostFn = func(string) error {
-		order = append(order, "vm")
-		return nil
-	}
-
-	handled, err := handleLocalCommand([]string{"install"}, &catch.Config{}, t.TempDir(), io.Discard)
-	if err != nil {
-		t.Fatalf("handleLocalCommand install returned error: %v", err)
-	}
-	if !handled {
-		t.Fatal("install command was not handled")
-	}
-	want := []string{"docker", "snapshotter", "runtime", "install", "vm"}
-	if !reflect.DeepEqual(order, want) {
-		t.Fatalf("install order = %#v, want %#v", order, want)
 	}
 }
 
