@@ -20,6 +20,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -760,9 +761,48 @@ func writeLine(out io.Writer, value string) error {
 	return err
 }
 
+// Systemd keeps the listening socket open from early boot. Its copy survives
+// service restarts, so a client can connect before the RPC handler is ready.
+func localAdminListener(path string) (net.Listener, error) {
+	if os.Getenv("LISTEN_FDS") == "" {
+		// A standalone invocation still creates its own socket.
+		ln, err := net.Listen("unix", path)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(path, 0600); err != nil {
+			logClose("local admin listener", ln)
+			return nil, err
+		}
+		return ln, nil
+	}
+	if os.Getenv("LISTEN_PID") != strconv.Itoa(os.Getpid()) || os.Getenv("LISTEN_FDS") != "1" {
+		return nil, errors.New("expected one systemd socket for this process")
+	}
+	// sd_listen_fds passes descriptors starting at 3. FileListener duplicates
+	// the descriptor with close-on-exec, so close the inherited original.
+	file := os.NewFile(3, "catch.socket")
+	ln, err := net.FileListener(file)
+	logClose("inherited catch.socket", file)
+	if err != nil {
+		return nil, err
+	}
+	if ln.Addr().Network() != "unix" || ln.Addr().String() != path {
+		logClose("unexpected admin listener", ln)
+		return nil, fmt.Errorf("expected Unix listener at %s", path)
+	}
+	return ln, nil
+}
+
 func runServer(dataDir string, scfg *catch.Config) {
 	lock := mustAcquireCatchServerLock(dataDir)
 	defer logClose("catch server lock", lock)
+
+	var admin net.Listener
+	if *localAdmin {
+		admin = must.Get(localAdminListener(catchrpc.LocalSocket))
+		defer logClose("local admin listener", admin)
+	}
 
 	// Require tsnet to continue.
 	ts, err := initTSNet(dataDir)
@@ -792,11 +832,8 @@ func runServer(dataDir string, scfg *catch.Config) {
 	registryMux.Handle("/v2/", server.RegistryHandler())
 	go serveRegistry(regln, registryMux)
 
-	if *localAdmin {
-		// systemd creates /run/yeet-admin before startup and removes it on stop.
-		ln := must.Get(net.Listen("unix", catchrpc.LocalSocket))
-		must.Do(os.Chmod(catchrpc.LocalSocket, 0600))
-		go func() { must.Do(http.Serve(ln, server.RPCMux())) }()
+	if admin != nil {
+		go func() { must.Do(http.Serve(admin, server.RPCMux())) }()
 	}
 
 	// Run the RPC server in the foreground.

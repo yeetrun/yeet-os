@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -27,6 +28,85 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/views"
 )
+
+func TestStandaloneLocalAdminSocket(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("LISTEN_FDS", "")
+	ln, err := localAdminListener("rpc.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	info, err := os.Stat("rpc.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode(); mode&os.ModeSocket == 0 || mode.Perm() != 0600 {
+		t.Fatalf("unexpected admin socket mode %v", mode)
+	}
+}
+
+func TestLocalAdminRejectsForeignActivation(t *testing.T) {
+	t.Setenv("LISTEN_PID", "0")
+	t.Setenv("LISTEN_FDS", "1")
+	if _, err := localAdminListener("rpc.sock"); err == nil {
+		t.Fatal("accepted activation for another process")
+	}
+}
+
+// Queue a client before the daemon starts, just as systemd does at boot.
+func TestLocalAdminSocketActivation(t *testing.T) {
+	const socket = "rpc.sock"
+	if os.Getenv("YEET_TEST_SOCKET_CHILD") == "1" {
+		t.Setenv("LISTEN_PID", fmt.Sprint(os.Getpid()))
+		ln, err := localAdminListener(socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		conn, err := ln.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := io.WriteString(conn, "ready"); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	t.Chdir(t.TempDir())
+	owner, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	file, err := owner.File()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	client, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLocalAdminSocketActivation$")
+	child.Env = append(os.Environ(), "YEET_TEST_SOCKET_CHILD=1", "LISTEN_FDS=1")
+	child.ExtraFiles = []*os.File{file}
+	if out, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("socket handoff: %v: %s", err, out)
+	}
+	if got, err := io.ReadAll(client); err != nil || string(got) != "ready" {
+		t.Fatalf("queued client received %q: %v", got, err)
+	}
+	if _, err := os.Stat(socket); err != nil {
+		t.Fatalf("daemon removed the systemd-owned socket: %v", err)
+	}
+}
 
 func TestDefaultDataDirUsesVarLib(t *testing.T) {
 	if got, want := defaultDataDir(), "/var/lib/yeet"; got != want {

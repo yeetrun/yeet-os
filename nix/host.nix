@@ -3,6 +3,10 @@ let
   cfg = config.services.yeet-host;
   package = pkgs.yeet-nix;
   unitDir = "/var/lib/yeet-systemd/etc/systemd/system";
+  enrollmentFiles = [
+    "|${cfg.dataDir}/tsnet/tailscaled.state"
+    "|/run/yeet-enrollment.env"
+  ];
   runtimeTools = with pkgs; [
     package bubblewrap coreutils bash iproute2 iptables ipset nftables procps
     gawk gnugrep gnused dhcpcd util-linux shadow getent docker-compose
@@ -162,26 +166,33 @@ in {
         Restart = "on-failure";
       };
     };
+    # Hold local CLI connections while Catch initializes, including across service restarts.
+    systemd.sockets.catch = {
+      description = "Yeet local administration socket";
+      wantedBy = [ "sockets.target" ];
+      unitConfig.ConditionPathExists = enrollmentFiles;
+      listenStreams = [ "/run/yeet-admin/rpc.sock" ];
+      socketConfig = {
+        DirectoryMode = "0700";
+        SocketMode = "0600";
+        RemoveOnStop = true;
+      };
+    };
     systemd.services.catch = {
       description = "Yeet host service";
       wantedBy = [ "multi-user.target" ];
       wants = [ "network-online.target" ];
       after = [ "network-online.target" "containerd.service" "systemd-tmpfiles-setup.service" ];
-      requires = [ "containerd.service" "yeet-ns.service" "yeet-dns.service" ];
+      requires = [ "catch.socket" "containerd.service" "yeet-ns.service" "yeet-dns.service" ];
       environment.SYSTEMD_UNIT_PATH = "/etc/systemd/system:${unitDir}:";
       path = runtimeTools ++ [ config.virtualisation.docker.package config.systemd.package ];
-      unitConfig.ConditionPathExists = [
-        "|${cfg.dataDir}/tsnet/tailscaled.state"
-        "|/run/yeet-enrollment.env"
-      ];
+      unitConfig.ConditionPathExists = enrollmentFiles;
       preStart = ''
         # The resolver migration verifies a stable, singly linked executable.
         install -m 0755 ${package}/bin/catch /var/lib/yeet-host/run/.catch.new
         mv -f /var/lib/yeet-host/run/.catch.new /var/lib/yeet-host/run/catch
       '';
       serviceConfig = {
-        RuntimeDirectory = "yeet-admin";
-        RuntimeDirectoryMode = "0700";
         ExecStart = "/var/lib/yeet-host/run/catch --local-admin --tsnet-host=${if cfg.hostname == null then "%H" else cfg.hostname} --data-dir=${cfg.dataDir} --services-root=${cfg.servicesRoot}";
         EnvironmentFile = [ "-${cfg.dataDir}/tsnet/enrollment.env" "-/run/yeet-enrollment.env" ];
         WorkingDirectory = "${cfg.servicesRoot}/catch/data";

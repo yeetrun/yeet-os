@@ -61,7 +61,7 @@ yeet run devbox vm://nixos/26.05
 yeet ssh devbox -- uname -a
 ```
 
-The installed host also includes the CLI. Sign in over SSH as root and run `yeet status` or `yeet restart web`. On Yeet OS, `localhost` selects the root-owned Unix socket at `/run/yeet-admin/rpc.sock`. Explicit host settings and project targets still apply. Use `yeet restart web@localhost` to select this machine explicitly.
+The installed host also includes the CLI. Sign in over SSH as root and run `yeet status` or `yeet restart web`. On Yeet OS, `localhost` selects the root-owned Unix socket at `/run/yeet-admin/rpc.sock`. You can run these commands as soon as SSH accepts your login after a reboot. Systemd queues the connection while Yeet starts. Explicit host settings and project targets still apply. Use `yeet restart web@localhost` to select this machine explicitly.
 
 ## Build the Yeet binaries
 
