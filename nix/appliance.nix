@@ -42,6 +42,10 @@ in {
   }];
   services.openssh.settings.PermitRootLogin = lib.mkDefault "no";
   systemd.services.catch.environment.YEET_HOST_LOGIN = toString hostLogin;
+  systemd.sockets.catch.socketConfig = {
+    DirectoryMode = "0711";
+    SocketUser = "yeet";
+  };
 
   # Install the wizard key, or import a legacy key file once before SSH starts.
   # A key removed from the new account must stay revoked across reboots.
@@ -69,9 +73,9 @@ in {
     # Network troubleshooting
     dnsutils ethtool iftop iperf3 mtr netcat-openbsd tcpdump traceroute
     # Hardware and storage
-    duf lm_sensors ncdu nvme-cli parted pciutils smartmontools usbutils
+    duf ioping lm_sensors ncdu nvme-cli parted pciutils smartmontools usbutils
     # Interactive administration and file transfers
-    file gitMinimal jq ripgrep rsync tmux tree unzip vim wget zip
+    file gitMinimal jq lnav ripgrep rsync tmux tree unzip vim wget zip
   ];
   system.systemBuilderCommands = ''
     ln -s ${releaseSources.source} "$out/yeet-os-source"
@@ -82,6 +86,9 @@ in {
   nix.nixPath = [ "nixpkgs=${releaseSources.nixpkgs}" "home-manager=${pkgs.home-manager.src}" ];
   # Seed the installer's login account once. Its edited config belongs to the user.
   systemd.tmpfiles.rules = [
+    # Update the existing socket and directory during a live upgrade as well.
+    "d /run/yeet-admin 0711 root root -"
+    "z /run/yeet-admin/rpc.sock 0600 yeet root -"
     "C /etc/nixos/local/default.nix 0644 root root - ${./local-default.nix}"
     "d /home/yeet/.config 0700 yeet users -"
     "d /home/yeet/.config/home-manager 0700 yeet users -"

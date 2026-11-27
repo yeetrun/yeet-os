@@ -42,16 +42,16 @@ You can also point `yeet run` at a local script, a binary, or a Compose file. [I
 
 Sign in with your workstation key, for example `ssh yeet@yeet-home.local`. From a workstation configured for this host, `yeet ssh` opens the same account over your tailnet. Releases through v0.3.0 used `root` for the login.
 
-Run `sudo -s` for a root shell, or use `sudo` for individual commands:
+From that shell, check your apps or restart one:
 
 ```sh
-sudo yeet status
-sudo yeet restart web
+yeet status
+yeet restart web
 ```
 
-These commands use the local host by default. From your laptop, keep using the host’s Tailscale name.
+These commands use the local host by default. Use `sudo -s` when you need a root shell. From your laptop, keep using the host’s Tailscale name.
 
-Run `duf /` to see how much space is left on the root filesystem. The host includes `htop` and `btop` for a quick look at load, `iostat` and `smartctl` for disks, and `dig`, `mtr`, `iperf3` and `tcpdump` for network troubleshooting. You can also use `tmux`, `vim`, `git`, `jq` and `rsync` straight from your SSH session.
+Run `duf /` to see how much space is left on the root filesystem. Use `lnav` to browse logs and `ioping -c 3 ~` to check storage latency. The host includes `htop` and `btop` for a quick look at load, `iostat` and `smartctl` for disks, and `dig`, `mtr`, `iperf3` and `tcpdump` for network troubleshooting. You can also use `tmux`, `vim`, `git`, `jq` and `rsync` straight from your SSH session.
 
 ## Update the host
 

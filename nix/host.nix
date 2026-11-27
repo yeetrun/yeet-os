@@ -173,7 +173,7 @@ in {
       unitConfig.ConditionPathExists = enrollmentFiles;
       listenStreams = [ "/run/yeet-admin/rpc.sock" ];
       socketConfig = {
-        DirectoryMode = "0700";
+        DirectoryMode = lib.mkDefault "0700";
         SocketMode = "0600";
         RemoveOnStop = true;
       };
