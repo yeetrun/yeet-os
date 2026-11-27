@@ -10,7 +10,8 @@
       osSource = nixpkgs.lib.fileset.toSource {
         root = ./.;
         fileset = nixpkgs.lib.fileset.unions [
-          ./VERSION ./flake.nix ./flake.lock ./nix ./installer ./yeet-nix/cmd ./yeet-nix/pkg
+          ./VERSION ./flake.nix ./flake.lock ./.tack/pins.toml ./.tack/pins.lock.json
+          ./nix ./installer ./yeet-nix/cmd ./yeet-nix/pkg
           ./yeet-nix/flake.nix ./yeet-nix/flake.lock ./yeet-nix/overlay.nix ./yeet-nix/package.nix
           ./yeet-nix/go.mod ./yeet-nix/go.sum ./yeet-nix/README.md ./yeet-nix/website/docs
         ];

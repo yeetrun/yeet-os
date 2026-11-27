@@ -51,6 +51,8 @@ sudo yeet restart web
 
 These commands use the local host by default. From your laptop, keep using the host’s Tailscale name.
 
+The host includes `htop` and `btop` for a quick look at load, `iostat` and `smartctl` for disks, and `dig`, `mtr`, `iperf3` and `tcpdump` for network troubleshooting. You can also use `tmux`, `vim`, `git`, `jq` and `rsync` straight from your SSH session.
+
 ## Update the host
 
 From your SSH session, run:

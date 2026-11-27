@@ -29,6 +29,7 @@ def main():
     args.output.parent.mkdir(exist_ok=True, parents=True)
     if args.output.exists():
         parser.error("output already exists")
+    subprocess.run([sys.executable, ROOT / "tools/update-nixpkgs", "--check"], check=True)
     with tempfile.TemporaryDirectory(dir=args.output.parent) as tmp:
         work = Path(tmp).resolve()
         out = work / "assets"

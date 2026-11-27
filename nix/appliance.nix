@@ -62,7 +62,17 @@ in {
       touch /var/lib/yeet-os/login-migrated
     '';
   };
-  environment.systemPackages = [ (pkgs.callPackage ./update-tool.nix {}) pkgs.home-manager ];
+  environment.systemPackages = with pkgs; [
+    (callPackage ./update-tool.nix {}) home-manager
+    # Processes, open files and performance
+    htop btop sysstat iotop lsof strace
+    # Network troubleshooting
+    dnsutils ethtool iftop iperf3 mtr netcat-openbsd tcpdump traceroute
+    # Hardware and storage
+    lm_sensors ncdu nvme-cli parted pciutils smartmontools usbutils
+    # Interactive administration and file transfers
+    file gitMinimal jq ripgrep rsync tmux tree unzip vim wget zip
+  ];
   system.systemBuilderCommands = ''
     ln -s ${releaseSources.source} "$out/yeet-os-source"
     ln -s ${releaseSources.nixpkgs} "$out/yeet-os-nixpkgs"

@@ -119,7 +119,6 @@ The updater reads the existing installer settings and records the boot mode from
 Set `VERSION` to the intended stable version before tagging the source. On a native Linux builder, use a clean checkout of that tag. Run the following with Python 3.11+, Nix and zstd:
 
 ```sh
-tools/update-nixpkgs --check
 tools/build-update /tmp/yeet-release-assets
 ```
 
@@ -136,6 +135,8 @@ tack look nixpkgs
 tools/update-nixpkgs
 git diff -- .tack/pins.lock.json flake.lock yeet-nix/flake.lock
 ```
+
+The release builder checks both flake locks against Tack before exporting assets. On a running host, `/run/current-system/yeet-os-source/.tack/pins.lock.json` records the upstream nixpkgs revision for that generation. The Yeet package and NixOS modules come from the same Yeet OS release.
 
 If Tack is missing, run `nix shell github:manic-systems/tack/v2.0.0 --command tools/update-nixpkgs`.
 
