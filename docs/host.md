@@ -73,7 +73,7 @@ Sign in as `yeet`. Run `sudo -s` for an administrative shell, or prefix individu
 
 `yeet-os status` works offline. After a live switch, it compares the next boot's kernel, module tree, initrd (which can include early CPU microcode), and kernel parameters with the booted generation. If they differ, reboot when ready to use the new boot components. A change that NixOS marks incompatible with live switching, such as switching D-Bus implementations, stages the entire generation and reports why. Yeet OS never reboots the host automatically.
 
-The updater installed in v0.3.2 and earlier always stages the new generation. To activate an already staged release immediately on one of those hosts, run `sudo nixos-rebuild switch --store-path "$(readlink -f /nix/var/nix/profiles/system)"`. If NixOS declines the switch, reboot into the staged generation.
+The updater installed in v0.3.2 and earlier always stages the new generation. To activate an already staged release immediately on one of those hosts, run `sudo nixos-rebuild switch --no-reexec --store-path "$(readlink -f /nix/var/nix/profiles/system)"`. If NixOS declines the switch, reboot into the staged generation.
 
 The installer saves four machine-specific files under `/etc/nixos`. They describe the boot mode, networking, hostname and storage chosen in the wizard. Yeet supplies the NixOS modules, pinned nixpkgs and Yeet binaries with each release. The host imports those modules, applies its own settings and builds a complete NixOS generation. New upstream packages are fetched from the Nix binary cache. Each retained generation keeps its release sources so you can rebuild with the same pin.
 
