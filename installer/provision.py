@@ -13,6 +13,8 @@ import socket
 import subprocess
 import tempfile
 
+from system_build import FACTS, build_system
+
 
 class SetupError(Exception):
     pass
@@ -283,7 +285,7 @@ def prepare_system(site, config, firmware):
     if machine and config.get("recover_dataset"):
         machine = dict(machine, hostname=config["hostname"], hostId=layout["hostId"])
     site.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(os.environ["YEET_OS_SOURCE"], site / "yeet-os", symlinks=True)
+    (site / "firmware.json").write_text(json.dumps(firmware))
     (site / "machine.json").write_text(json.dumps(machine))
     lan = discovery_interfaces(machine["network"] if machine else {})
     host = {"hostname": config["hostname"], "interfaces": lan}
@@ -296,30 +298,12 @@ def prepare_system(site, config, firmware):
             host["lanUplink"] = uplink
     (site / "layout.json").write_text(json.dumps(layout))
     (site / "host.json").write_text(json.dumps(host))
-    (site / "flake.nix").write_text(
-        '{ inputs.os.url = "path:./yeet-os";\n'
-        "  outputs = { os, ... }: let machine = builtins.fromJSON (builtins.readFile ./machine.json);\n"
-        "    layout = builtins.fromJSON (builtins.readFile ./layout.json);\n"
-        f'    base = os.lib.installed machine "{firmware}";\n'
-        "    host = builtins.fromJSON (builtins.readFile ./host.json);\n"
-        "  in { nixosConfigurations.yeet-os = base.extendModules {\n"
-        "    specialArgs = { inherit layout host; }; modules = [ ./yeet-os/nix/discovery.nix ]\n"
-        "      ++ base.pkgs.lib.optional (layout != null) ./yeet-os/nix/layout.nix; }; }; }\n"
-    )
-    return run(
-        "nix",
-        "--extra-experimental-features",
-        "nix-command flakes",
-        "build",
-        "path:"
-        + str(site)
-        + "#nixosConfigurations.yeet-os.config.system.build.toplevel",
-        "--override-input",
-        "os/nixpkgs",
-        "path:" + os.environ["YEET_NIXPKGS_SOURCE"],
-        "--no-write-lock-file",
-        "--no-link",
-        "--print-out-paths",
+    return build_system(
+        run,
+        os.environ["YEET_OS_SOURCE"],
+        os.environ["YEET_NIXPKGS_SOURCE"],
+        site,
+        out_link=site / ".system",
     )
 
 
@@ -485,9 +469,9 @@ def install(config, key, event):
                         disk,
                     )
                 configure_access(root, config)
-                shutil.copytree(
-                    stage, root / "etc/nixos", symlinks=True, dirs_exist_ok=True
-                )
+                (root / "etc/nixos").mkdir(parents=True, exist_ok=True)
+                for name in FACTS:
+                    shutil.copyfile(Path(stage, name), root / "etc/nixos" / name)
                 data = tpath(
                     root, layout["data"]["path"] if layout else "/var/lib/yeet"
                 )

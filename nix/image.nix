@@ -23,6 +23,7 @@
   fileSystems."/boot".options = lib.mkIf config.image.efiSupport [ "umask=0077" ];
   boot.kernelParams = [ "console=tty0" "console=ttyS0,115200" ];
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
+  environment.etc."yeet-os/image".text = "cloud-init\n";
   image.baseName = "yeet-os";
   system.stateVersion = "26.05";
 }

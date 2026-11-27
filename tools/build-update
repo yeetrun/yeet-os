@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Build static release assets on a native Linux builder."""
+
+import argparse
+import hashlib
+import json
+import platform
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / "installer"))
+from update import PARTS, VERSION, asset, validate
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", type=Path, help="new directory for release assets")
+    args = parser.parse_args()
+    system = platform.machine() + "-linux"
+    if platform.system() != "Linux" or system not in ("x86_64-linux", "aarch64-linux"):
+        parser.error("run on an x86-64 or ARM64 Linux builder")
+    version = (ROOT / "VERSION").read_text().strip()
+    if not VERSION.fullmatch(version):
+        parser.error("invalid VERSION")
+    args.output.parent.mkdir(exist_ok=True, parents=True)
+    if args.output.exists():
+        parser.error("output already exists")
+    with tempfile.TemporaryDirectory(dir=args.output.parent) as tmp:
+        work = Path(tmp).resolve()
+        out = work / "assets"
+        out.mkdir()
+        # Use Git's tracked files in a checkout, or an unpacked release tree.
+        flake = str(ROOT)
+        paths = json.loads(
+            subprocess.check_output(
+                ["nix", "eval", "--json", flake + "#lib.updateSources"]
+            )
+        )
+        paths["runtime"] = subprocess.check_output(
+            [
+                "nix",
+                "build",
+                flake + "#yeet-nix",
+                "--out-link",
+                work / "runtime",
+                "--print-out-paths",
+            ],
+            text=True,
+        ).strip()
+        data = {"format": 1, "version": version, "system": system}
+        for part in PARTS:
+            path = paths[part]
+            closure = subprocess.check_output(
+                ["nix-store", "-qR", path], text=True
+            ).splitlines()
+            archive = out / asset(part, system)
+            with subprocess.Popen(
+                ["nix-store", "--export", *closure], stdout=subprocess.PIPE
+            ) as export:
+                with archive.open("wb") as dest:
+                    subprocess.run(
+                        ["zstd", "-q", "-T2", "-3"],
+                        stdin=export.stdout,
+                        stdout=dest,
+                        check=True,
+                    )
+                if export.wait():
+                    sys.exit(f"failed to export {part}")
+            with archive.open("rb") as file:
+                data[part] = {
+                    "path": path,
+                    "sha256": hashlib.file_digest(file, "sha256").hexdigest(),
+                }
+        validate(data, system)
+        (out / f"yeet-os-{system}.json").write_text(json.dumps(data, indent=2) + "\n")
+        out.rename(args.output)
+
+
+if __name__ == "__main__":
+    main()

@@ -67,6 +67,62 @@ The installed host also includes the CLI. Sign in over SSH as root and run `yeet
 
 From a Linux checkout, run `nix build ./yeet-nix#catch`. The output includes `result/bin/catch`, `result/bin/yeet`, and `result/bin/yeet-enroll`. The OS imports the fork’s package overlay and builds these same binaries with its pinned nixpkgs.
 
+## Update an installed host
+
+Sign in as root. `yeet-os check` shows the running, selected and available releases. `yeet-os upgrade` stages the latest stable release for the next boot. `yeet-os status` works offline. Reboot when your workloads can restart.
+
+The installer saves four machine-specific files under `/etc/nixos`. They describe the boot mode, networking, hostname and storage chosen in the wizard. Yeet supplies the NixOS modules, pinned nixpkgs and Yeet binaries with each release. The host imports those modules, applies its own settings and builds a complete NixOS generation. New upstream packages are fetched from the Nix binary cache. Each retained generation keeps its release sources so you can rebuild with the same pin.
+
+### Change settings on one machine
+
+Edit `/etc/nixos/local/default.nix` as root. This is a regular NixOS module and can import other files in the same directory. For example:
+
+```nix
+{ pkgs, ... }: {
+  networking.hostName = "workshop";
+  environment.systemPackages = [ pkgs.tmux pkgs.ripgrep ];
+  fileSystems."/srv/archive" = {
+    device = "/dev/disk/by-label/ARCHIVE";
+    fsType = "ext4";
+    options = [ "nofail" ];
+  };
+}
+```
+
+Use the device and filesystem type from your machine. Run `yeet-os rebuild` to stage your edits using the selected release, then reboot. The next `yeet-os upgrade` includes the same local module. Ordinary NixOS option priorities apply. Some disk or network options that already have a value from the installer may need `lib.mkForce` to replace it. Keep secrets outside the module directory because Nix copies its contents into the readable Nix store.
+
+### Customize your login
+
+Edit `~/.config/home-manager/home.nix` as your login user. Add packages to `home.packages`, or set a variable such as `home.sessionVariables.EDITOR = "nano";`. Run `home-manager switch` and sign in again. The Home Manager CLI and its nixpkgs come from the booted OS release. Your file and personal profile stay in place across OS upgrades. Back up both your home directory and `/etc/nixos/local` if you plan to replace the OS disk.
+
+### Roll back
+
+Run `yeet-os rollback` to select the previous system generation, then reboot. If SSH is unavailable, choose a prior generation in the boot menu. A rollback selects the OS and host settings built into that generation. Your editable files stay on disk for the next rebuild. Manage app releases separately with `yeet service rollback`.
+
+### Upgrade from v0.2.2
+
+The v0.2.2 ISO predates the updater. Once the first update-enabled stable release is published, run its CLI once on a stock ISO-installed host:
+
+```sh
+nix run 'https://github.com/yeetrun/yeet-os/archive/refs/tags/v0.3.0.tar.gz#yeet-os' -- upgrade
+reboot
+```
+
+The updater reads the existing installer settings and records the boot mode from the old site flake. Your original site flake and source copy remain on disk. If you hand-edited either of them, move those overrides into `/etc/nixos/local/default.nix` before the first upgrade. Later upgrades use the installed `yeet-os` command.
+
+## Build update assets for a release
+
+Set `VERSION` to the intended stable version before tagging the source. On a native Linux builder, use a clean checkout of that tag. Run the following with Python 3.11+, Nix and zstd:
+
+```sh
+tools/update-nixpkgs --check
+tools/build-update /tmp/yeet-release-assets
+```
+
+Run once per supported architecture. Upload all four files from each output directory alongside the ISO and checksum to the **draft** GitHub Release tagged `v<VERSION>`. Publish it as latest after the assets are present. Keep published assets immutable.
+
+Hosts read a small JSON file at `releases/latest/download/yeet-os-<system>.json` over HTTPS. Its version selects a tag-specific URL for each missing asset, so concurrent releases cannot mix downloads. Each manifest names the exact Nix store paths and SHA-256 digests of the compressed exports. Hosts verify downloaded exports and reuse paths already in the store. The trust anchor for the manifest is the project's GitHub release over HTTPS. For a staged rollout, copy the manifest and assets to a directory on a test host and run `yeet-os upgrade --manifest /path/to/yeet-os-x86_64-linux.json`.
+
 ## Update nixpkgs for a release
 
 Yeet OS and the standalone Yeet flake share the nixpkgs pin in `.tack/`. From the repository root, use Tack 2, Nix and Python 3.11 or newer to review and apply a branch update.
@@ -81,7 +137,7 @@ If Tack is missing, run `nix shell github:manic-systems/tack/v2.0.0 --command to
 
 Run `tools/update-nixpkgs --check` to check both locks offline. The check uses Nix and Python and also runs in pre-commit when the pin or either flake changes. Builds and installs use the checked-in flake locks. To switch release branches, change the URL in `.tack/pins.toml` and both `flake.nix` declarations before running the update command. [Tack installation](https://github.com/manic-systems/tack/blob/v2.0.0/docs/obtaining.md)
 
-## Customize or update the host
+## Use the module in your own NixOS distribution
 
 Import `nixosModules.default` into an existing NixOS flake and enable `services.yeet-host.enable`. To customize the distributed disk, extend the image configuration. For example, in a site flake next to this checkout:
 

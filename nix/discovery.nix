@@ -12,7 +12,7 @@ in {
     "10-yeet-uplink".matchConfig = lib.mkForce { Name = "br0"; };
   };
   networking.useNetworkd = lib.mkIf (bridges != {}) (lib.mkDefault true);
-  networking.hostName = host.hostname;
+  networking.hostName = lib.mkDefault host.hostname;
   services.avahi.allowInterfaces = if lan == [] then [ "lo" ] else lan;
   networking.firewall.interfaces = lib.genAttrs lan (_: { allowedUDPPorts = [ 5353 ]; });
 }

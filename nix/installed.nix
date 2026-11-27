@@ -2,8 +2,8 @@
 {
   imports = [ (modulesPath + "/profiles/all-hardware.nix") ];
   services.yeet-host.enable = true;
-  # The installer supplies the hostname and LAN interfaces in its site flake.
-  networking.hostName = lib.mkDefault "";
+  # The disk wizard or the local host module supplies the hostname.
+  networking.hostName = lib.mkOverride 1100 "";
   networking.useDHCP = lib.mkDefault true;
   boot.initrd.availableKernelModules = [ "ahci" "nvme" "xhci_pci" "uas" "usb_storage" "sd_mod" "ata_piix" "virtio_pci" "virtio_scsi" "virtio_blk" "vmw_pvscsi" "hv_storvsc" ];
   fileSystems."/" = { device = "/dev/disk/by-label/YEETROOT"; fsType = "ext4"; };
