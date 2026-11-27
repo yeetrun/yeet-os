@@ -69,7 +69,11 @@ From a Linux checkout, run `nix build ./yeet-nix#catch`. The output includes `re
 
 ## Update an installed host
 
-Sign in as `yeet`. Run `sudo -s` for an administrative shell, or prefix individual administrative commands with `sudo`. `yeet-os check` shows the running, selected and available releases. `yeet-os upgrade` stages the latest stable release for the next boot. `yeet-os status` works offline. Reboot when your workloads can restart.
+Sign in as `yeet`. Run `sudo -s` for an administrative shell, or prefix individual administrative commands with `sudo`. `yeet-os check` shows the running, selected and available releases. `sudo yeet-os upgrade` activates the latest stable release and selects it for future boots. Your current SSH shell can use newly installed programs immediately. NixOS starts enabled system services and reloads or restarts affected units. Use `sudo yeet-os upgrade --boot-only` to defer activation to a maintenance window.
+
+`yeet-os status` works offline. After a live switch, it compares the next boot's kernel, module tree, initrd (which can include early CPU microcode), and kernel parameters with the booted generation. If they differ, reboot when ready to use the new boot components. A change that NixOS marks incompatible with live switching, such as switching D-Bus implementations, stages the entire generation and reports why. Yeet OS never reboots the host automatically.
+
+The updater installed in v0.3.2 and earlier always stages the new generation. To activate an already staged release immediately on one of those hosts, run `sudo nixos-rebuild switch --store-path "$(readlink -f /nix/var/nix/profiles/system)"`. If NixOS declines the switch, reboot into the staged generation.
 
 The installer saves four machine-specific files under `/etc/nixos`. They describe the boot mode, networking, hostname and storage chosen in the wizard. Yeet supplies the NixOS modules, pinned nixpkgs and Yeet binaries with each release. The host imports those modules, applies its own settings and builds a complete NixOS generation. New upstream packages are fetched from the Nix binary cache. Each retained generation keeps its release sources so you can rebuild with the same pin.
 
@@ -89,11 +93,11 @@ Edit `/etc/nixos/local/default.nix` as root. This is a regular NixOS module and 
 }
 ```
 
-Use the device and filesystem type from your machine. Run `yeet-os rebuild` to stage your edits using the selected release, then reboot. The next `yeet-os upgrade` includes the same local module. Ordinary NixOS option priorities apply. Some disk or network options that already have a value from the installer may need `lib.mkForce` to replace it. Keep secrets outside the module directory because Nix copies its contents into the readable Nix store.
+Use the device and filesystem type from your machine. Run `sudo yeet-os rebuild` to apply your edits using the selected release. Use `--boot-only` to defer them. The next `yeet-os upgrade` includes the same local module. Ordinary NixOS option priorities apply. Some disk or network options that already have a value from the installer may need `lib.mkForce` to replace it. Keep secrets outside the module directory because Nix copies its contents into the readable Nix store.
 
 ### Customize your login
 
-Sign in as `yeet` and edit `~/.config/home-manager/home.nix`. Run Home Manager as that user. Add packages to `home.packages`, or set a variable such as `home.sessionVariables.EDITOR = "nano";`. Run `home-manager switch` and sign in again. The Home Manager CLI and its nixpkgs come from the booted OS release. Your file and personal profile stay in place across OS upgrades. Back up both your home directory and `/etc/nixos/local` if you plan to replace the OS disk.
+Sign in as `yeet` and edit `~/.config/home-manager/home.nix`. Run Home Manager as that user. Add packages to `home.packages`, or set a variable such as `home.sessionVariables.EDITOR = "nano";`. Run `home-manager switch` and sign in again. The Home Manager CLI and its nixpkgs come from the active OS release. Your file and personal profile stay in place across OS upgrades. Back up both your home directory and `/etc/nixos/local` if you plan to replace the OS disk.
 
 ### Roll back
 

@@ -1,4 +1,4 @@
-"""Stage an official Yeet OS release for the next boot."""
+"""Update Yeet OS and manage the active and next-boot generations."""
 
 import argparse
 import fcntl
@@ -20,6 +20,7 @@ RELEASES = "https://github.com/yeetrun/yeet-os/releases"
 SYSTEM = platform.machine() + "-linux"
 PROFILE = Path("/nix/var/nix/profiles/system")
 RUNNING = Path("/run/current-system")
+BOOTED = Path("/run/booted-system")
 SITE = Path("/etc/nixos")
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 STORE = re.compile(r"/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[\w.+?=-]+")
@@ -134,10 +135,11 @@ def machine_site(work):
     return site
 
 
-def stage(*args):
+def select_generation(action, *args):
     previous = PROFILE.readlink()
+    active = RUNNING.resolve(strict=True)
     try:
-        subprocess.run(["nixos-rebuild", "boot", "--no-reexec", *args], check=True)
+        subprocess.run(["nixos-rebuild", action, "--no-reexec", *args], check=True)
     except (KeyboardInterrupt, subprocess.CalledProcessError):
         if PROFILE.readlink() != previous:
             number = re.fullmatch(r"system-(\d+)-link", previous.name)[1]
@@ -147,16 +149,56 @@ def stage(*args):
             subprocess.run(
                 [PROFILE / "bin/switch-to-configuration", "boot"], check=True
             )
+        # A switch may fail after changing units, even before current-system moves.
+        if action == "switch":
+            subprocess.run(
+                ["nixos-rebuild", "test", "--no-reexec", "--store-path", active],
+                check=True,
+            )
         raise
+
+
+def changed_inhibitors(target):
+    def inhibitors(profile):
+        file = profile / "switch-inhibitors"
+        return json.loads(file.read_bytes()) if file.is_file() else {}
+
+    old, new = inhibitors(RUNNING), inhibitors(target)
+    # Match NixOS's pre-switch check: a shared key whose value changed.
+    return sorted(key for key in old.keys() & new.keys() if old[key] != new[key])
+
+
+def boot_changes(target):
+    if not BOOTED.is_dir():
+        return []
+    changed = []
+    for name in ("kernel", "kernel-modules", "initrd"):
+        old, new = BOOTED / name, target / name
+        if (old.exists() or new.exists()) and old.resolve() != new.resolve():
+            changed.append(name)
+
+    def kernel_params(profile):
+        path = profile / "kernel-params"
+        return path.read_bytes() if path.is_file() else None
+
+    if kernel_params(BOOTED) != kernel_params(target):
+        changed.append("kernel parameters")
+    return changed
 
 
 def status():
     print(f"Running: {version(RUNNING)}\nNext boot: {version(PROFILE)}")
-    if RUNNING.resolve() != PROFILE.resolve():
+    active = RUNNING.resolve() == PROFILE.resolve()
+    if not active:
         print("A different system generation is selected for the next boot.")
+    changed = boot_changes(PROFILE)
+    if changed:
+        print("Reboot to apply changes to " + ", ".join(changed) + ".")
+    elif active and BOOTED.is_dir():
+        print("No reboot needed for this generation.")
 
 
-def build_generation(command, manifest, work):
+def build_generation(command, manifest, work, boot_only=False):
     if command == "rebuild":
         source = PROFILE / "yeet-os-source"
         if not source.exists():
@@ -182,16 +224,19 @@ def build_generation(command, manifest, work):
     system = build_system(
         run, source, nixpkgs, site, SYSTEM, work / "system", local=SITE / "local"
     )
-    if Path(system) == PROFILE.resolve():
-        print("This generation is already selected for the next boot.")
-        return
-    stage("--store-path", system)
+    target = Path(system)
+    blockers = [] if boot_only else changed_inhibitors(target)
+    if blockers:
+        print("NixOS requires a reboot for changes to " + ", ".join(blockers) + ".", flush=True)
+    action = "boot" if boot_only or blockers else "switch"
+    if target != PROFILE.resolve() or (action == "switch" and target != RUNNING.resolve()):
+        select_generation(action, "--store-path", system)
     if site is not None and not (SITE / "firmware.json").exists():
         # Keep the old site flake for rollback. Future updates only need the facts.
         with tempfile.NamedTemporaryFile(dir=SITE, delete=False) as firmware:
             firmware.write((site / "firmware.json").read_bytes())
         os.replace(firmware.name, SITE / "firmware.json")
-    print(f"Selected {version(PROFILE)} for the next boot. Reboot when ready.")
+    status()
 
 
 def version_tuple(value):
@@ -208,9 +253,15 @@ def main():
         type=Path,
         help="use a local release manifest and its sibling assets",
     )
+    parser.add_argument(
+        "--boot-only", action="store_true",
+        help="stage an upgrade or rebuild for the next boot without activating it now",
+    )
     args = parser.parse_args()
     if args.manifest and args.command not in ("upgrade", "check"):
         parser.error("--manifest applies to check and upgrade")
+    if args.boot_only and args.command not in ("upgrade", "rebuild"):
+        parser.error("--boot-only applies to upgrade and rebuild")
     if not (RUNNING / "etc/yeet-os/managed").is_file():
         parser.exit(1, "Run this command on an installed Yeet OS host.\n")
     if args.command == "status":
@@ -230,12 +281,12 @@ def main():
         with open("/run/yeet-os-update.lock", "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if args.command == "rollback":
-                stage("--rollback")
+                select_generation("boot", "--rollback")
                 print(
                     f"Selected {version(PROFILE)} for the next boot. Reboot when ready."
                 )
             else:
-                build_generation(args.command, args.manifest, work)
+                build_generation(args.command, args.manifest, work, args.boot_only)
 
 
 if __name__ == "__main__":

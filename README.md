@@ -60,10 +60,9 @@ From your SSH session, run:
 ```sh
 yeet-os check
 sudo yeet-os upgrade
-sudo reboot
 ```
 
-The upgrade prepares a new boot generation. Your apps keep running until you choose to reboot. The disk layout, networking and host identity you set up in the installer carry forward.
+The upgrade makes new commands available in your current shell and activates system services. Changed services may restart. If boot components changed, the updater tells you what takes effect on reboot. For a maintenance window, use `sudo yeet-os upgrade --boot-only` and reboot when ready. Hosts running v0.3.2 or earlier have the previous updater and stage upgrades for the next boot.
 
 For machine-wide changes, edit `/etc/nixos/local/default.nix` and run `yeet-os rebuild`. This file can set the hostname, configure storage or add packages for everyone. For your own shell and tools, edit `~/.config/home-manager/home.nix` and run `home-manager switch`. [Host settings, rollback and upgrading from v0.2.2](docs/host.md#update-an-installed-host)
 

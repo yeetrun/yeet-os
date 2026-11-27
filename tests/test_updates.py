@@ -12,6 +12,35 @@ from system_build import FACTS, build_system
 
 
 class UpdateTests(unittest.TestCase):
+    def test_boot_status_compares_with_booted_generation_after_a_switch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            booted, active = root / "booted", root / "active"
+            for system in (booted, active):
+                system.mkdir()
+                (system / "kernel-params").write_text("quiet")
+                (system / "kernel").symlink_to(root / "old-kernel")
+            (root / "old-kernel").touch()
+            (root / "new-kernel").touch()
+            with patch.object(update, "BOOTED", booted):
+                self.assertEqual(update.boot_changes(active), [])
+                (active / "kernel").unlink()
+                (active / "kernel").symlink_to(root / "new-kernel")
+                (active / "kernel-params").write_text("debug")
+                self.assertEqual(update.boot_changes(active), ["kernel", "kernel parameters"])
+
+    def test_only_changed_shared_nixos_inhibitors_block_live_switch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            running, target = Path(tmp) / "old", Path(tmp) / "new"
+            running.mkdir()
+            target.mkdir()
+            (running / "switch-inhibitors").write_text('{"dbus":"broker","gone":1}')
+            (target / "switch-inhibitors").write_text('{"dbus":"classic","added":2}')
+            with patch.object(update, "RUNNING", running):
+                self.assertEqual(update.changed_inhibitors(target), ["dbus"])
+                (target / "switch-inhibitors").unlink()
+                self.assertEqual(update.changed_inhibitors(target), [])
+
     def test_latest_manifest_uses_tag_pinned_assets_and_checks_before_import(self):
         data = {
             "format": 1,
