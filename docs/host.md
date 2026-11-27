@@ -67,6 +67,20 @@ The installed host also includes the CLI. Sign in over SSH as root and run `yeet
 
 From a Linux checkout, run `nix build ./yeet-nix#catch`. The output includes `result/bin/catch`, `result/bin/yeet`, and `result/bin/yeet-enroll`. The OS imports the fork’s package overlay and builds these same binaries with its pinned nixpkgs.
 
+## Update nixpkgs for a release
+
+Yeet OS and the standalone Yeet flake share the nixpkgs pin in `.tack/`. From the repository root, use Tack 2, Nix and Python 3.11 or newer to review and apply a branch update.
+
+```sh
+tack look nixpkgs
+tools/update-nixpkgs
+git diff -- .tack/pins.lock.json flake.lock yeet-nix/flake.lock
+```
+
+If Tack is missing, run `nix shell github:manic-systems/tack/v2.0.0 --command tools/update-nixpkgs`.
+
+Run `tools/update-nixpkgs --check` to check both locks offline. The check uses Nix and Python and also runs in pre-commit when the pin or either flake changes. Builds and installs use the checked-in flake locks. To switch release branches, change the URL in `.tack/pins.toml` and both `flake.nix` declarations before running the update command. [Tack installation](https://github.com/manic-systems/tack/blob/v2.0.0/docs/obtaining.md)
+
 ## Customize or update the host
 
 Import `nixosModules.default` into an existing NixOS flake and enable `services.yeet-host.enable`. To customize the distributed disk, extend the image configuration. For example, in a site flake next to this checkout:

@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Update Yeet's shared Tack pin and project it into both native flake locks."""
+
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[1]
+FLAKES = (Path("flake.nix"), Path("yeet-nix/flake.nix"))
+
+
+def run(check):
+    url = tomllib.loads(Path(".tack/pins.toml").read_text())["inputs"]["nixpkgs"]["url"]
+    locks = {}
+    for flake in FLAKES:
+        # Inspect the declaration without resolving or fetching any flake inputs.
+        declaration = subprocess.check_output(
+            ["nix-instantiate", "--eval", "--strict", "--json", flake, "-A", "inputs.nixpkgs.url"],
+            text=True,
+        )
+        if json.loads(declaration) != url:
+            sys.exit(f"{flake} must declare the nixpkgs URL from .tack/pins.toml: {url}")
+        path = flake.with_suffix(".lock")
+        graph = json.loads(path.read_text())
+        nodes = graph["nodes"]
+        node = nodes[nodes[graph["root"]]["inputs"]["nixpkgs"]]
+        locks[path] = (graph, node)
+
+    if not check:
+        subprocess.run(
+            ["tack", "update", "nixpkgs"],
+            check=True,
+            env=dict(os.environ, TACK_DIR=str(ROOT / ".tack")),
+        )
+
+    pins = json.loads(Path(".tack/pins.lock.json").read_text())
+    pin = pins["nixpkgs"]
+    if pins["$declared"]["nixpkgs"] != url:
+        sys.exit("The Tack lock does not match pins.toml. Run tools/update-nixpkgs.")
+    prefix = f"github:{pin['owner']}/{pin['repo']}/"
+    if pin["type"] != "github" or not url.startswith(prefix) or not url[len(prefix):]:
+        sys.exit(f"Expected a GitHub branch for the locked nixpkgs repository, got {url}")
+    original = dict(type="github", owner=pin["owner"], repo=pin["repo"], ref=url[len(prefix):])
+    locked = {k: pin[k] for k in ("type", "owner", "repo", "rev", "lastModified", "narHash")}
+
+    changed = {}
+    for path, (graph, node) in locks.items():
+        if node.get("original") != original or node.get("locked") != locked:
+            node.update(original=original, locked=locked)
+            changed[path] = json.dumps(graph, indent=2, sort_keys=True) + "\n"
+
+    if changed and check:
+        sys.exit("Nixpkgs pin drift in " + ", ".join(map(str, changed)) + ". Run tools/update-nixpkgs.")
+    for path, content in changed.items():
+        with tempfile.TemporaryDirectory(dir=path.parent) as tmp:
+            staged = Path(tmp) / path.name
+            staged.write_text(content)
+            staged.chmod(path.stat().st_mode & 0o777)
+            staged.replace(path)
+    print(f"Both flake locks match Tack at {pin['rev']}.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="check for drift offline without writing")
+    args = parser.parse_args()
+    os.chdir(ROOT)
+    # Serialize repo updates and checks without a lockfile in the checkout.
+    directory = os.open(".tack", os.O_RDONLY)
+    try:
+        fcntl.flock(directory, fcntl.LOCK_SH if args.check else fcntl.LOCK_EX)
+        run(args.check)
+    except (KeyError, OSError, ValueError, subprocess.CalledProcessError) as error:
+        sys.exit(f"Cannot synchronize nixpkgs: {error}")
+    finally:
+        os.close(directory)
