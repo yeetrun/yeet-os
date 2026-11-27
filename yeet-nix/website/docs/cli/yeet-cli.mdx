@@ -673,6 +673,8 @@ yeet ssh -- uname -a
 yeet ssh <svc> -- ls -la
 ```
 
+On Yeet OS, `yeet ssh` and `yeet ssh -- <command>` use the `yeet` administrator account and its Home Manager environment. Run `sudo -s` inside the session for a root shell.
+
 After `yeet init`, host and regular service shells use catch over Tailscale and
 do not require host SSH keys or a host password. Interactive regular service
 shells use the service account's configured shell when it is usable, then the

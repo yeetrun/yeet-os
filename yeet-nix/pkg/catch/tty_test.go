@@ -134,6 +134,30 @@ func TestHostShellTargetRunsCommand(t *testing.T) {
 	}
 }
 
+func TestManagedHostShellUsesLoginProgram(t *testing.T) {
+	login := filepath.Join(t.TempDir(), "login")
+	if err := os.WriteFile(login, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("YEET_HOST_LOGIN", login)
+	out := newTestDuplexRW("")
+	e := &ttyExecer{
+		ctx: context.Background(), target: catchrpc.ExecTargetHostShell,
+		args: []string{"printf", "two words", ""}, rw: out,
+	}
+	if err := e.exec(); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "printf\ntwo words\n\n" {
+		t.Fatalf("login arguments: %q", got)
+	}
+	t.Setenv("YEET_HOST_LOGIN", login+"-missing")
+	e.args = []string{"true"}
+	if err := e.exec(); err == nil {
+		t.Fatal("host shell succeeded without the configured login program")
+	}
+}
+
 func TestHostShellTargetRunsCommandInInstallUserHome(t *testing.T) {
 	oldPasswd := passwdFilePath
 	t.Cleanup(func() { passwdFilePath = oldPasswd })

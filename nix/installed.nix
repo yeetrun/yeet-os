@@ -42,7 +42,7 @@
   environment.systemPackages = [ (pkgs.callPackage ./setup-tool.nix {}) ];
   environment.etc."issue".text = ''
     Yeet OS
-    Sign in and run yeet-setup for workstation setup and host enrollment.
+    Sign in as yeet and run sudo yeet-setup for workstation setup and host enrollment.
   '';
   system.stateVersion = "26.05";
 }

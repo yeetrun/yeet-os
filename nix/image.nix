@@ -15,6 +15,14 @@
   services.cloud-init = {
     enable = true;
     settings = {
+      users = [ "default" ];
+      system_info = {
+        distro = "nixos";
+        network.renderers = [ "networkd" ];
+        default_user = { name = "yeet"; lock_passwd = true; };
+      };
+      disable_root = true;
+      ssh_pwauth = false;
       datasource_list = [ "NoCloud" "None" ];
       ssh_deletekeys = false;
       ssh_genkeytypes = [];

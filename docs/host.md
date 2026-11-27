@@ -23,17 +23,17 @@ qm create "$vmid" --name yeet-os --machine q35 --bios ovmf --cpu host \
   --agent enabled=1 --serial0 socket
 qm set "$vmid" --efidisk0 "$storage:1,efitype=4m,pre-enrolled-keys=0" \
   --scsi0 "$storage:0,import-from=$image" --ide2 "$storage:cloudinit" \
-  --ciuser root --sshkeys "$pubkey" --ipconfig0 ip=dhcp --boot order=scsi0
+  --ciuser yeet --sshkeys "$pubkey" --ipconfig0 ip=dhcp --boot order=scsi0
 qm resize "$vmid" scsi0 40G
 qm start "$vmid"
 qm guest cmd "$vmid" network-get-interfaces
 ```
 
-Wait for the guest agent, then connect to the DHCP address with SSH. The image accepts a NoCloud public key and grows its root filesystem on boot.
+Wait for the guest agent, then connect with `ssh yeet@<guest-ip>`. The image accepts a NoCloud public key and grows its root filesystem on boot.
 
 ## Connect the host to Tailscale and deploy an app
 
-Use a Tailscale auth key with the `tag:catch` tag for the host. For a fleet, choose a unique `services.yeet-host.hostname` in each machine's configuration before enrollment. The generic image uses `yeet-os`. Run these commands in Bash as root **inside the guest**. The enrollment file lives in tmpfs.
+Use a Tailscale auth key with the `tag:catch` tag for the host. For a fleet, choose a unique `services.yeet-host.hostname` in each machine's configuration before enrollment. The generic image uses `yeet-os`. Run `sudo -s` inside the guest, then run these commands in Bash. The enrollment file lives in tmpfs.
 
 ```bash
 catch host-check
@@ -61,7 +61,7 @@ yeet run devbox vm://nixos/26.05
 yeet ssh devbox -- uname -a
 ```
 
-The installed host also includes the CLI. Sign in over SSH as root and run `yeet status` or `yeet restart web`. On Yeet OS, `localhost` selects the root-owned Unix socket at `/run/yeet-admin/rpc.sock`. You can run these commands as soon as SSH accepts your login after a reboot. Systemd queues the connection while Yeet starts. Explicit host settings and project targets still apply. Use `yeet restart web@localhost` to select this machine explicitly.
+The installed host also includes the CLI. Sign in over SSH as `yeet` and run `sudo yeet status` or `sudo yeet restart web`. From a workstation, `yeet ssh` starts a login shell as `yeet` on this host. On Yeet OS, `localhost` selects the root-owned Unix socket at `/run/yeet-admin/rpc.sock`. You can run these commands as soon as SSH accepts your login after a reboot. Systemd queues the connection while Yeet starts. Explicit host settings and project targets still apply. Use `sudo yeet restart web@localhost` to select this machine explicitly.
 
 ## Build the Yeet binaries
 
@@ -69,7 +69,7 @@ From a Linux checkout, run `nix build ./yeet-nix#catch`. The output includes `re
 
 ## Update an installed host
 
-Sign in as root. `yeet-os check` shows the running, selected and available releases. `yeet-os upgrade` stages the latest stable release for the next boot. `yeet-os status` works offline. Reboot when your workloads can restart.
+Sign in as `yeet`. Run `sudo -s` for an administrative shell, or prefix individual administrative commands with `sudo`. `yeet-os check` shows the running, selected and available releases. `yeet-os upgrade` stages the latest stable release for the next boot. `yeet-os status` works offline. Reboot when your workloads can restart.
 
 The installer saves four machine-specific files under `/etc/nixos`. They describe the boot mode, networking, hostname and storage chosen in the wizard. Yeet supplies the NixOS modules, pinned nixpkgs and Yeet binaries with each release. The host imports those modules, applies its own settings and builds a complete NixOS generation. New upstream packages are fetched from the Nix binary cache. Each retained generation keeps its release sources so you can rebuild with the same pin.
 
@@ -93,15 +93,19 @@ Use the device and filesystem type from your machine. Run `yeet-os rebuild` to s
 
 ### Customize your login
 
-Edit `~/.config/home-manager/home.nix` as your login user. Add packages to `home.packages`, or set a variable such as `home.sessionVariables.EDITOR = "nano";`. Run `home-manager switch` and sign in again. The Home Manager CLI and its nixpkgs come from the booted OS release. Your file and personal profile stay in place across OS upgrades. Back up both your home directory and `/etc/nixos/local` if you plan to replace the OS disk.
+Sign in as `yeet` and edit `~/.config/home-manager/home.nix`. Run Home Manager as that user. Add packages to `home.packages`, or set a variable such as `home.sessionVariables.EDITOR = "nano";`. Run `home-manager switch` and sign in again. The Home Manager CLI and its nixpkgs come from the booted OS release. Your file and personal profile stay in place across OS upgrades. Back up both your home directory and `/etc/nixos/local` if you plan to replace the OS disk.
 
 ### Roll back
 
 Run `yeet-os rollback` to select the previous system generation, then reboot. If SSH is unavailable, choose a prior generation in the boot menu. A rollback selects the OS and host settings built into that generation. Your editable files stay on disk for the next rebuild. Manage app releases separately with `yeet service rollback`.
 
+### Moving from the root login
+
+On v0.3.0 and earlier, the default SSH login was `root`. On the first boot of a release with the `yeet` account, the host copies the old installer key file from `/root/.ssh/authorized_keys` if `yeet` has no key file yet. Sign in with the same key as `yeet`. If you manage keys in a local NixOS module, set `users.users.yeet.openssh.authorizedKeys.keys` there before upgrading. Your existing root home and Home Manager configuration stay in `/root`. Copy any personal settings you want to use into the new account. For console access on an upgraded host, set a password with `sudo passwd yeet`.
+
 ### Upgrade from v0.2.2
 
-The v0.2.2 ISO predates the updater. Once the first update-enabled stable release is published, run its CLI once on a stock ISO-installed host:
+The v0.2.2 ISO predates the updater. On a stock ISO-installed host, run the v0.3.0 CLI once as root:
 
 ```sh
 nix run 'https://github.com/yeetrun/yeet-os/archive/refs/tags/v0.3.0.tar.gz#yeet-os' -- upgrade

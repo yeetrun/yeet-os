@@ -552,6 +552,10 @@ func (e *ttyExecer) newCmd(name string, args ...string) *exec.Cmd {
 var passwdFilePath = "/etc/passwd"
 
 func (e *ttyExecer) hostShellCmdFunc(args []string) error {
+	// Yeet OS supplies the login program. Payload shells have their own identity.
+	if login := os.Getenv("YEET_HOST_LOGIN"); login != "" {
+		return e.newCmd(login, args...).Run()
+	}
 	return e.runShellCommand(args, e.defaultShellHomeDir())
 }
 

@@ -40,23 +40,25 @@ You can also point `yeet run` at a local script, a binary, or a Compose file. [I
 
 ## Manage apps over SSH
 
-Yeet OS includes the CLI. SSH into your host and run:
+Sign in with your workstation key, for example `ssh yeet@yeet-home.local`. From a workstation configured for this host, `yeet ssh` opens the same account over your tailnet. Releases through v0.3.0 used `root` for the login.
+
+Run `sudo -s` for a root shell, or use `sudo` for individual commands:
 
 ```sh
-yeet status
-yeet restart web
+sudo yeet status
+sudo yeet restart web
 ```
 
-These commands use the local host by default. Use `sudo yeet` when signed in as a non-root administrator. From your laptop, keep using the host’s Tailscale name.
+These commands use the local host by default. From your laptop, keep using the host’s Tailscale name.
 
 ## Update the host
 
-On releases with the updater, SSH in as root and run:
+From your SSH session, run:
 
 ```sh
 yeet-os check
-yeet-os upgrade
-reboot
+sudo yeet-os upgrade
+sudo reboot
 ```
 
 The upgrade prepares a new boot generation. Your apps keep running until you choose to reboot. The disk layout, networking and host identity you set up in the installer carry forward.

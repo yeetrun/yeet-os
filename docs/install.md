@@ -59,9 +59,9 @@ Review the exact OS disk and the action for each storage location. Type the OS d
 
 ## Find the installed host on the LAN
 
-After booting from disk, a machine named `yeet-home` publishes `yeet-home.local` and the Bonjour SSH service `_ssh._tcp` through Avahi. From the same LAN, sign in with `ssh root@yeet-home.local`. On a Mac, `dns-sd -B _ssh._tcp local` browses available SSH services. During installation, use the SSH command on the console for the public ISO, or the tailnet name for a private ISO.
+After booting from disk, a machine named `yeet-home` publishes `yeet-home.local` and the Bonjour SSH service `_ssh._tcp` through Avahi. From the same LAN, sign in with `ssh yeet@yeet-home.local`. The installer key signs you into `yeet`. The console password also belongs to `yeet`; SSH uses public keys. Run `sudo -s` for a root shell. On a Mac, `dns-sd -B _ssh._tcp local` browses available SSH services. During installation, use the SSH command on the console for the public ISO, or the tailnet name for a private ISO.
 
-The installer records physical Ethernet-type interfaces in `/etc/nixos/host.json`. Static installations use the selected adapter. DHCP installations use the detected hardware adapters. If you replace or rename an adapter, update the list and run `yeet-os rebuild`, then reboot. Discovery follows the Yeet LAN bridge when configured. Payload networks are excluded. Installed hosts also enable time synchronization, weekly SSD TRIM, the NixOS firewall and the QEMU guest agent.
+The installer records physical Ethernet-type interfaces in `/etc/nixos/host.json`. Static installations use the selected adapter. DHCP installations use the detected hardware adapters. If you replace or rename an adapter, update the list and run `sudo yeet-os rebuild`, then reboot. Discovery follows the Yeet LAN bridge when configured. Payload networks are excluded. Installed hosts also enable time synchronization, weekly SSD TRIM, the NixOS firewall and the QEMU guest agent.
 
 ## Recover an existing Yeet host
 
@@ -98,7 +98,7 @@ yeet run web nginx:alpine -p 8080:80
 yeet ssh -- curl -fsS http://127.0.0.1:8080/
 ```
 
-If the network goes down after the disk installation finishes, boot the installed disk, sign in locally and run `yeet-setup` to finish enrollment. Run `yeet-setup` from the installed host's root console to revisit workstation setup. The wizard saves the machine settings in `/etc/nixos`. Put host-wide NixOS changes in `/etc/nixos/local/default.nix`, then run `yeet-os rebuild` and reboot. Use `yeet-os upgrade` to stage a new OS release. Payload deploys use the ordinary Yeet CLI. Deployments requesting a separate Tailscale identity for a service also need a service provisioning credential as described in the [host instructions](host.md#connect-the-host-to-tailscale-and-deploy-an-app).
+If the network goes down after the disk installation finishes, boot the installed disk, sign in locally as `yeet` and run `sudo yeet-setup` to finish enrollment. Run `sudo yeet-setup` from the installed host to revisit workstation setup. The wizard saves the machine settings in `/etc/nixos`. Put host-wide NixOS changes in `/etc/nixos/local/default.nix`, then run `sudo yeet-os rebuild` and reboot. Use `sudo yeet-os upgrade` to stage a new OS release. Payload deploys use the ordinary Yeet CLI. Deployments requesting a separate Tailscale identity for a service also need a service provisioning credential as described in the [host instructions](host.md#connect-the-host-to-tailscale-and-deploy-an-app).
 
 ## Unattended install
 

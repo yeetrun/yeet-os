@@ -151,16 +151,15 @@ def partition(disk, firmware):
 
 def configure_access(root, config):
     if config.get("ssh_public_key"):
-        ssh = root / "root/.ssh"
-        ssh.mkdir(mode=0o700, parents=True, exist_ok=True)
-        private_write(ssh / "authorized_keys", config["ssh_public_key"] + "\n")
+        # First boot installs the key as the login user, even on a reused /home.
+        private_write(root / "var/lib/yeet-os/installer-key", config["ssh_public_key"] + "\n")
     digest = config.get("password_hash")
     if config.get("password"):
         digest = run(
             "openssl", "passwd", "-6", "-stdin", stdin=config["password"] + "\n"
         )
     if digest:
-        run("chpasswd", "-R", str(root), "-e", stdin="root:" + digest + "\n")
+        run("chpasswd", "-R", str(root), "-e", stdin="yeet:" + digest + "\n")
 
 
 def validate_network(n):

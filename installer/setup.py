@@ -322,8 +322,8 @@ class Console:
             (
                 CLIENT_INSTALL,
                 "yeet config --host=" + name,
-                "yeet version",
                 "yeet run web nginx:alpine -p 8080:80",
+                "yeet ssh",
             )
         ):
             self.put(y + 2 * i, 4, cmd, curses.color_pair(1))
@@ -461,14 +461,14 @@ class Console:
                     public_key = self.field(
                         "SSH ACCESS",
                         "SSH into the installed host",
-                        "Paste your workstation’s SSH public key (the .pub file). "
+                        "Paste your workstation’s SSH public key to sign in as yeet. "
                         "Leave blank for console access only. The live SSH password expires on reboot.",
                         limit=16384,
                     ).strip()
                     password = self.field(
                         "LOCAL ACCESS",
                         "Set a console password",
-                        "Use this password to sign in locally as root.",
+                        "Use this password to sign in locally as yeet. Use sudo -s for a root shell.",
                         secret=True,
                     )
                     if not password or password != self.field(
