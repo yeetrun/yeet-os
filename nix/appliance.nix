@@ -69,7 +69,7 @@ in {
     # Network troubleshooting
     dnsutils ethtool iftop iperf3 mtr netcat-openbsd tcpdump traceroute
     # Hardware and storage
-    lm_sensors ncdu nvme-cli parted pciutils smartmontools usbutils
+    duf lm_sensors ncdu nvme-cli parted pciutils smartmontools usbutils
     # Interactive administration and file transfers
     file gitMinimal jq ripgrep rsync tmux tree unzip vim wget zip
   ];
