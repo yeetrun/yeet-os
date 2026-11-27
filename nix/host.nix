@@ -90,6 +90,7 @@ in {
         cp -L "$library" "$out/"
       done
     '';
+    programs.bash.completion.enable = true;
     environment.systemPackages = runtimeTools;
     programs.nix-ld.enable = true;
     boot.supportedFilesystems = [ "nfs" "cifs" ];

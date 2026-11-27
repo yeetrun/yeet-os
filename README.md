@@ -53,13 +53,21 @@ These commands use the local host by default. Use `sudo -s` when you need a root
 
 Run `duf /` to see how much space is left on the root filesystem. Use `lnav` to browse logs and `ioping -c 3 ~` to check storage latency. The host includes `htop` and `btop` for a quick look at load, `iostat` and `smartctl` for disks, and `dig`, `mtr`, `iperf3` and `tcpdump` for network troubleshooting. You can also use `tmux`, `vim`, `git`, `jq` and `rsync` straight from your SSH session.
 
+In Bash, press Tab to complete commands, flags, and local service names. For example, type `yeet stat` and press Tab to get `yeet status`. After `yeet restart `, press Tab twice to list matching services. If you already tried Tab in this shell before upgrading from v0.3.5, run `complete -r yeet` once to clear Bash’s cached fallback.
+
 ## Update the host
 
-From your SSH session, run:
+From the console or a regular SSH connection (for example, `ssh yeet@yeet-home.local`), run:
 
 ```sh
 yeet-os check
 sudo yeet-os upgrade
+```
+
+If you connected with `yeet ssh`, start the upgrade as a systemd job. That connection can drop when the Yeet host service restarts. The job keeps running, and you can reconnect and run `yeet-os status` to see the active version.
+
+```sh
+sudo systemd-run --unit=yeet-os-upgrade --collect --setenv=PATH=/run/current-system/sw/bin /run/current-system/sw/bin/yeet-os upgrade
 ```
 
 The upgrade makes new commands available in your current shell and activates system services. Changed services may restart. If boot components changed, the updater tells you what takes effect on reboot. For a maintenance window, use `sudo yeet-os upgrade --boot-only` and reboot when ready. Hosts running v0.3.2 or earlier have the previous updater and stage upgrades for the next boot.

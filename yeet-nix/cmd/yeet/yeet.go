@@ -39,6 +39,12 @@ func run() int {
 	// Keep buildinfo linked into yeet so release ldflags can stamp the binary.
 	_ = buildinfo.Version()
 	rawArgs = os.Args[1:]
+	if len(rawArgs) > 0 && rawArgs[0] == "__complete" {
+		for _, candidate := range completeWords(rawArgs[1:], localServiceNames) {
+			fmt.Println(candidate)
+		}
+		return 0
+	}
 	globalFlags, remaining, err := parseGlobalFlags(rawArgs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
