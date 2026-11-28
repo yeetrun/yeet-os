@@ -25,6 +25,8 @@ import (
 	"github.com/yeetrun/yeet/pkg/fileutil"
 	"github.com/yeetrun/yeet/pkg/svc"
 	"github.com/yeetrun/yeet/pkg/targz"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 	"tailscale.com/client/tailscale/v2"
 	"tailscale.com/ipn"
 	"tailscale.com/types/opt"
@@ -189,15 +191,15 @@ func extractOauthID(oauthSecret string) (string, bool) {
 	return id, ok
 }
 
-func tsClient(ctx context.Context) (*tailscale.Client, error) {
+func tsClient(ctx context.Context, keyTags ...string) (*tailscale.Client, error) {
 	b, err := os.ReadFile("tailscale.key")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read tailscale.key: %w", err)
 	}
-	return tailscaleClientFromSecret(strings.TrimSpace(string(b)))
+	return tailscaleClientFromSecret(ctx, strings.TrimSpace(string(b)), keyTags)
 }
 
-func tailscaleClientFromSecret(clientSecret string) (*tailscale.Client, error) {
+func tailscaleClientFromSecret(ctx context.Context, clientSecret string, keyTags []string) (*tailscale.Client, error) {
 	if !strings.HasPrefix(clientSecret, "tskey-client-") {
 		return nil, errors.New("invalid tailscale oauth secret")
 	}
@@ -221,21 +223,31 @@ func tailscaleClientFromSecret(clientSecret string) (*tailscale.Client, error) {
 			Scopes:       []string{"device"},
 		},
 	}
+	if keyTags != nil {
+		// Narrowing a token to auth_keys also requires explicitly requesting its tags.
+		grant := clientcredentials.Config{
+			ClientID: clientID, ClientSecret: clientSecret,
+			TokenURL: parsedBaseURL.String() + "/api/v2/oauth/token",
+			Scopes:   []string{"auth_keys"}, EndpointParams: url.Values{"tags": {strings.Join(keyTags, " ")}},
+		}
+		tsClient.Auth = nil
+		tsClient.HTTP = grant.Client(context.WithValue(ctx, oauth2.HTTPClient, tsClient.HTTP))
+	}
 	return tsClient, nil
 }
 
 func generateTailscaleAuthKey(ctx context.Context, tags []string) (string, error) {
-	tsClient, err := tsClient(ctx)
+	tsClient, err := tsClient(ctx, tags...)
 	if err != nil {
 		return "", err
 	}
 	return createTailscaleAuthKey(ctx, tsClient, tags)
 }
 
-// GenerateTailscaleAuthKeyFromSecret creates a reusable preauthorized auth key
+// GenerateTailscaleAuthKeyFromSecret creates a single-use preauthorized auth key
 // for the requested tags using a Tailscale OAuth client secret.
 func GenerateTailscaleAuthKeyFromSecret(ctx context.Context, clientSecret string, tags []string) (string, error) {
-	tsClient, err := tailscaleClientFromSecret(strings.TrimSpace(clientSecret))
+	tsClient, err := tailscaleClientFromSecret(ctx, strings.TrimSpace(clientSecret), tags)
 	if err != nil {
 		return "", err
 	}
@@ -245,11 +257,12 @@ func GenerateTailscaleAuthKeyFromSecret(ctx context.Context, clientSecret string
 func createTailscaleAuthKey(ctx context.Context, tsClient *tailscale.Client, tags []string) (string, error) {
 	caps := tailscale.KeyCapabilities{}
 	caps.Devices.Create.Preauthorized = true
-	caps.Devices.Create.Reusable = true
+	caps.Devices.Create.Reusable = false
 	caps.Devices.Create.Tags = tags
 
 	key, err := tsClient.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{
-		Capabilities: caps,
+		Capabilities:  caps,
+		ExpirySeconds: 3600,
 	})
 	if err != nil {
 		return "", err
@@ -258,6 +271,16 @@ func createTailscaleAuthKey(ctx context.Context, tsClient *tailscale.Client, tag
 }
 
 func (s *Server) getTailscaleAuthKey(ctx context.Context, tags []string) (string, error) {
+	if allowed := os.Getenv("YEET_SERVICE_TS_TAG"); allowed != "" {
+		if len(tags) == 0 {
+			tags = []string{allowed}
+		}
+		for _, tag := range tags {
+			if tag != allowed {
+				return "", fmt.Errorf("host enrollment is limited to service tag %s", allowed)
+			}
+		}
+	}
 	return generateTailscaleAuthKeyFn(ctx, tags)
 }
 
@@ -453,7 +476,7 @@ func writeTailscaleConfig(serviceTSDir, service, tsAuthKey, exitNode string) (st
 		return "", fmt.Errorf("error marshalling tailscaled config: %w", err)
 	}
 	tsCfgFile := filepath.Join(serviceTSDir, fileutil.ApplyVersion("tailscaled.json"))
-	if err := os.WriteFile(tsCfgFile, b, 0o644); err != nil {
+	if err := os.WriteFile(tsCfgFile, b, 0o600); err != nil {
 		return "", fmt.Errorf("error writing tailscaled config: %w", err)
 	}
 	return tsCfgFile, nil

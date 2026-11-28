@@ -12,6 +12,35 @@ import provision
 
 
 class InstallerTests(unittest.TestCase):
+    def test_enrollment_uses_a_scoped_token_and_revokes_preflight_keys(self):
+        import tailnet
+        from urllib.parse import parse_qs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            credential = Path(tmp, "secret")
+            credential.write_text("tskey-client-example-test")
+            enrollment = tailnet.Enrollment(credential)
+            responses = [{"access_token": "token"}, {"key": "one-time", "id": "id"}, {}]
+            with patch.object(tailnet, "api", side_effect=responses) as api:
+                enrollment.preflight(["tag:app"])
+        exchange, create, revoke = api.call_args_list
+        form = parse_qs(exchange.kwargs["body"].decode())
+        self.assertEqual(form["scope"], ["auth_keys"])
+        self.assertEqual(form["tags"], ["tag:app"])
+        node = json.loads(create.kwargs["body"])["capabilities"]["devices"]["create"]
+        self.assertEqual(node, {"tags": ["tag:app"], "reusable": False,
+                                "preauthorized": True, "ephemeral": False})
+        self.assertEqual(revoke.args, ("tailnet/-/keys/id",))
+        self.assertEqual(revoke.kwargs["method"], "DELETE")
+
+    def test_service_tag_cannot_be_a_management_tag(self):
+        from tailnet import validate_settings
+        settings = {"osTag": "tag:server", "serviceTag": "tag:app", "autoServices": True}
+        validate_settings(settings, "minilab", "yeet-minilab")
+        for overrides in ({"serviceTag": "tag:catch"}, {"serviceTag": "tag:server"}):
+            with self.assertRaises(provision.SetupError):
+                validate_settings(settings | overrides, "minilab", "yeet-minilab")
+
     def test_live_finish_waits_for_enter_before_poweroff(self):
         import setup
 

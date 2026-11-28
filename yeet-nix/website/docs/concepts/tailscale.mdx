@@ -19,6 +19,22 @@ There are two separate questions here: can your workstation reach catch, and
 what is the caller allowed to do after it reaches catch? Tailscale handles both
 layers, but they fail differently.
 
+## Yeet OS installer
+
+For a machine named `minilab`, use `ssh yeet@minilab` for a regular shell and
+`yeet --host=yeet-minilab status` to manage deployments. The installer lets you
+choose both names. A single OAuth client with **Auth Keys write** enrolls the
+two devices and supplies a separate one-time key for each new service. In the
+policy example below, also add `"tag:yeet-host": ["tag:yeet"]` to `tagOwners`.
+Grant your operators TCP 22 on the machine tag and grant app clients the ports
+they need on the service tag. Enable MagicDNS to reach devices by name.
+
+With automatic service enrollment selected, `yeet run web nginx:alpine`
+uses `svc,ts` and the installer's service tag. An explicit `--net=svc` keeps
+that service private to Yeet. Existing services retain their networking.
+A VM has its own guest operating system and controls its own Tailscale login.
+The installer also offers Yeet-server-only setup for browser sign-in or an auth key.
+
 ## First-time host setup
 
 Catch must join your tailnet as a tagged node, usually `tag:catch`. Catch

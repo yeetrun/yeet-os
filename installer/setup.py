@@ -585,6 +585,8 @@ class Console:
                     if recovery
                     else fresh_layout(self, name, machine)
                 )
+                server = (layout or {}).get("catchHostname", name)
+                settings = (layout or {}).get("tailnet") if recovery else None
                 password = ""
                 public_keys = [machine["sshPublicKey"]] if machine else []
                 network = None
@@ -624,18 +626,37 @@ class Console:
                         raise SetupError(
                             "The passwords must match and contain at least one character."
                         )
-                    if not recovery:
-                        auth_key = self.field(
-                            "TAILSCALE",
-                            "Connect your Yeet host",
-                            "Press Enter to sign in with a browser during installation, or paste "
-                            "a single-use, preauthorized, non-ephemeral auth key for tag:catch.",
-                            secret=True,
-                        ).strip()
+                if not settings:
+                    options = ["Connect the machine, Yeet server and services"]
+                    options.append("Keep the recovered Yeet server" if recovery else
+                                   "Connect only the Yeet server")
+                    mode = self.choose("TAILSCALE", "Connect to your tailnet",
+                                       "Full setup uses one OAuth client secret from your tailnet.", options)
+                    if mode == 0:
+                        if not recovery:
+                            server = self.field("TAILSCALE", "Name your Yeet server",
+                                f"SSH to the machine as yeet@{name}. Use this second name for Yeet commands.",
+                                "yeet-" + name)
+                        os_tag = self.field("TAILSCALE", "Machine tag",
+                            "Use a tag your OAuth client can assign to the operating system.", "tag:yeet-host")
+                        service_tag = self.field("TAILSCALE", "Service tag",
+                            "Yeet uses this tag when enrolling payloads.", "tag:app")
+                        auto = self.choose("TAILSCALE", "Give new services a Tailscale address?",
+                            "You can override this for an individual deployment with --net.",
+                            ["Automatically enroll new services", "Enroll only with --net=ts"])
+                        settings = dict(osTag=os_tag, serviceTag=service_tag, autoServices=auto == 0)
+                        from tailnet import validate_settings
+                        validate_settings(settings, name, server)
+                        auth_key = self.field("TAILSCALE", "Paste your OAuth client secret",
+                            f"In the Tailscale admin console, create an OAuth client with Auth Keys write. "
+                            f"Its tag must own {os_tag}, tag:catch and {service_tag}. "
+                            "Setup guide: yeetrun.com/docs/concepts/tailscale", secret=True).strip()
+                    elif not recovery and not machine:
+                        auth_key = self.field("TAILSCALE", "Connect your Yeet server",
+                            "Press Enter for browser sign-in or paste a one-time key for tag:catch.",
+                            secret=True).strip()
                         if auth_key and not auth_key.startswith("tskey-auth-"):
-                            raise SetupError(
-                                "Enter a Tailscale auth key or leave the field blank."
-                            )
+                            raise SetupError("Enter a Tailscale auth key or leave the field blank.")
                 summary = [
                     f"Erase {disk}   {dev['model'] or 'Disk'}   {dev['size'] / 1024**3:.1f} GiB",
                     f"Host   {name}",
@@ -644,6 +665,11 @@ class Console:
                         if public_keys else "No public keys"
                     ),
                 ]
+                if settings:
+                    summary.extend([f"SSH   yeet@{name}", f"Yeet server   {server}",
+                                    f"Service enrollment   {settings['serviceTag']}"])
+                    if recovery and (layout or {}).get("tailnet"):
+                        summary.append("Restore the saved machine and Yeet server identities.")
                 if layout:
                     from zfs_keys import verified_keys
 
@@ -694,6 +720,8 @@ class Console:
                     erase=confirm,
                     serial=dev["serial"],
                     hostname=name,
+                    catchHostname=server,
+                    tailnet=settings,
                     password=password,
                     network=network,
                     layout=layout,
@@ -739,13 +767,18 @@ def seed_file(path):
 def unattended(path):
     with seed_file(path) as seed:
         config = json.loads(seed.read_text())
-        key = (seed.parent / config["auth_key_file"]).resolve()
-        if (
-            not key.is_relative_to(seed.parent)
-            or not key.is_file()
-            or not key.read_text().strip()
-        ):
-            raise SetupError("Supply a valid auth_key_file alongside the install plan.")
+        key = None
+        if config.get("oauth_secret_file") and config.get("auth_key_file"):
+            raise SetupError("Choose either OAuth setup or a Yeet-server-only auth key.")
+        if config.get("oauth_secret_file"):
+            config.setdefault("tailnet", dict(osTag="tag:yeet-host", serviceTag="tag:app", autoServices=True))
+        file = config.get("oauth_secret_file") or config.get("auth_key_file")
+        if file:
+            key = (seed.parent / file).resolve()
+            if not key.is_relative_to(seed.parent) or not key.is_file() or not key.read_text().strip():
+                raise SetupError("Supply a nonempty enrollment credential alongside the install plan.")
+        elif not config.get("recover_dataset"):
+            raise SetupError("Supply an oauth_secret_file or auth_key_file alongside the install plan.")
         action = config.get("on_success", "reboot")
         if action not in ("reboot", "poweroff", "stay"):
             raise SetupError("Unknown on_success action.")

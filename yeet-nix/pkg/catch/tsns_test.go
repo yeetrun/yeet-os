@@ -781,3 +781,23 @@ func assertExecutable(t *testing.T, path string) {
 		t.Fatalf("%s mode = %v, want 0755", path, info.Mode().Perm())
 	}
 }
+
+func TestHostEnrollmentDefaultsAndTagRestriction(t *testing.T) {
+	t.Setenv("YEET_SERVICE_TS_TAG", "tag:app")
+	t.Setenv("YEET_AUTO_SERVICE_TS", "1")
+	for _, tc := range []struct{ input, want string }{
+		{"", "svc,ts"}, {"svc", "svc"}, {"host", "host"}, {"ts", "ts"},
+	} {
+		cfg := FileInstallerCfg{Network: NetworkOpts{Interfaces: tc.input}}
+		applyHostNetworkDefaults(&cfg, db.ServiceView{})
+		if cfg.Network.Interfaces != tc.want {
+			t.Errorf("network %q became %q, want %q", tc.input, cfg.Network.Interfaces, tc.want)
+		}
+		if strings.Contains(tc.want, "ts") && strings.Join(cfg.Network.Tailscale.Tags, ",") != "tag:app" {
+			t.Errorf("missing service tag for %q", tc.input)
+		}
+	}
+	if _, err := (&Server{}).getTailscaleAuthKey(context.Background(), []string{"tag:catch"}); err == nil {
+		t.Fatal("minting a management key through service enrollment succeeded")
+	}
+}

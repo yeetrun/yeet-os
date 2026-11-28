@@ -1,6 +1,8 @@
 { lib, pkgs, firmware, modulesPath, ... }:
 {
   imports = [ (modulesPath + "/profiles/all-hardware.nix") ];
+  services.tailscale.enable = true;
+  services.tailscale.openFirewall = true;
   services.yeet-host.enable = true;
   # The disk wizard or the local host module supplies the hostname.
   networking.hostName = lib.mkOverride 1100 "";

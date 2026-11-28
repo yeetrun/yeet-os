@@ -314,6 +314,10 @@ def prepare_system(site, config, firmware):
     (site / "machine.json").write_text(json.dumps(machine))
     lan = discovery_interfaces(machine["network"] if machine else {})
     host = {"hostname": config["hostname"], "interfaces": lan}
+    if config.get("catchHostname"):
+        host["catchHostname"] = config["catchHostname"]
+    if config.get("tailnet"):
+        host["tailnet"] = config["tailnet"]
     if not config.get("recover_dataset") and not (layout or {}).get("bridges"):
         uplink = lan_uplink(lan)
         if uplink and layout is not None:
@@ -450,9 +454,31 @@ def install(config, key, event):
         validate_layout(layout)
     from zfs_keys import verified_keys, install_keys
 
+    from tailnet import Enrollment, connect, validate_settings
+
+    stored = (layout or {}).get("tailnet") if recovery else None
+    settings = stored or config.get("tailnet")
+    server = (layout or {}).get("catchHostname") or config.get("catchHostname") or config["hostname"]
+    enrollment = None
+    if settings:
+        if not recovery:
+            server = config.get("catchHostname", "yeet-" + config["hostname"])
+        validate_settings(settings, config["hostname"], server)
+        if not stored:
+            if not key:
+                raise SetupError("Supply a Tailscale OAuth client secret for enrollment.")
+            enrollment = Enrollment(key)
+            event("progress", "Checking Tailscale enrollment permissions")
+            tags = [settings["osTag"], settings["serviceTag"]]
+            if not recovery:
+                tags.append("tag:catch")
+            enrollment.preflight(tags)
+        config = dict(config, tailnet=settings, catchHostname=server)
     keys = verified_keys(layout)
     if layout:
         layout = dict(layout)
+        if settings:
+            layout.update(tailnet=settings, catchHostname=server)
         layout.pop("encryptionRoots", None)
         if keys:
             layout["encryptionRoots"] = sorted(keys)
@@ -513,7 +539,11 @@ def install(config, key, event):
                 )
                 data.mkdir(parents=True, exist_ok=True)
                 name = (layout or {}).get("catchHostname", config["hostname"])
-                if not recovery:
+                if enrollment:
+                    services = tpath(root, layout["services"]["path"]) if layout else data / "services"
+                    name = connect(enrollment, settings, root, data, services,
+                                   config["hostname"], server, event, restore=bool(recovery))
+                elif not recovery:
                     ready = Path("/run/yeet-live/ready")
                     if ready.is_file():
                         shutil.copytree(ready.parent / "tsnet", data / "tsnet")
@@ -525,7 +555,7 @@ def install(config, key, event):
                     else:
                         event("progress", "Connecting your Yeet host to Tailscale")
                         name = enroll(
-                            root, config["hostname"], key, event, data_dir=data
+                            root, server, key, event, data_dir=data
                         )
                 if layout:
                     record = json.dumps(
@@ -556,8 +586,13 @@ def install(config, key, event):
                             Path(staged, "host-systemd/yeet-os-layout.json"), record
                         )
                         Path(staged, "host-systemd").rename(target)
-                elif layout and not recovery:
-                    private_write(data / "yeet-os-layout.json", record)
+                elif layout and (not recovery or enrollment):
+                    manifest = data / "yeet-os-layout.json"
+                    if recovery and not manifest.exists():
+                        manifest = data / "host-systemd/yeet-os-layout.json"
+                    with tempfile.NamedTemporaryFile(dir=manifest.parent, delete=False) as f:
+                        f.write(record.encode())
+                    os.replace(f.name, manifest)
                 run("sync", "-f", tmp)
             finally:
                 run("umount", "-R", tmp)
@@ -567,11 +602,13 @@ def install(config, key, event):
 
 
 def existing_host(event):
-    name = socket.gethostname()
+    host_file = Path("/etc/nixos/host.json")
+    host = json.loads(host_file.read_text()) if host_file.is_file() else {}
+    layout_file = Path("/etc/nixos/layout.json")
+    layout = json.loads(layout_file.read_text()) if layout_file.is_file() else {}
+    name = (layout or {}).get("catchHostname") or host.get("catchHostname") or socket.gethostname()
     if subprocess.run(["systemctl", "is-active", "--quiet", "catch"]).returncode:
         run("systemctl", "stop", "catch")
-        layout_file = Path("/etc/nixos/layout.json")
-        layout = json.loads(layout_file.read_text()) if layout_file.exists() else None
         data = Path(layout["data"]["path"]) if layout else None
         name = enroll(Path("/"), name, None, event, data_dir=data)
         run("systemctl", "start", "catch")

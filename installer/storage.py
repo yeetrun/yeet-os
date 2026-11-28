@@ -366,6 +366,8 @@ def recovery_descriptor(dataset):
             raise SetupError(
                 "This host used service storage on another filesystem. Recover with its original OS disk attached."
             )
+        if manifest["layout"].get("tailnet") and not (r / "os-tailscale/tailscaled.state").is_file():
+            raise SetupError(f"Recovery needs the saved machine Tailscale identity on {dataset}.")
         validate_layout(manifest["layout"], recover=True)
         manifest["service_count"] = check_saved_services(r, manifest["layout"])
         return manifest

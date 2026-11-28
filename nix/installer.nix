@@ -5,7 +5,7 @@ let
     nixpkgsSource = pkgs.path;
     extraInputs = with pkgs; [
       parted dosfstools e2fsprogs gptfdisk nixos-install-tools nix grub2
-      shadow openssl iproute2
+      shadow openssl iproute2 tailscale
     ];
   };
 in {

@@ -1,7 +1,7 @@
 { lib, buildGo127Module }:
 buildGo127Module {
   pname = "yeet-nix";
-  version = "0.11.16-nix.2";
+  version = "0.11.16-nix.3";
   src = lib.fileset.toSource {
     root = ./.;
     fileset = lib.fileset.unions [ ./cmd ./pkg ./go.mod ./go.sum ./README.md ./website/docs ];
@@ -14,7 +14,7 @@ buildGo127Module {
   env.CGO_ENABLED = 0;
   ldflags = [
     "-s" "-w"
-    "-X github.com/yeetrun/yeet/pkg/buildinfo.BuildVersion=v0.11.16-nix.2"
+    "-X github.com/yeetrun/yeet/pkg/buildinfo.BuildVersion=v0.11.16-nix.3"
     "-X github.com/yeetrun/yeet/pkg/svc.NixSandboxLauncher=/run/current-system/sw/bin/bwrap"
     "-X github.com/yeetrun/yeet/pkg/svc.SystemdUnitDirectory=/var/lib/yeet-systemd/etc/systemd/system"
     "-X github.com/yeetrun/yeet/pkg/catch.packagedRunner=/var/lib/yeet-host/run/catch"

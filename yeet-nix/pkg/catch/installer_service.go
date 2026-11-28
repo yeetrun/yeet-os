@@ -35,7 +35,7 @@ import (
 // as a service when closed.
 func (s *Server) NewInstaller(cfg InstallerCfg) (*Installer, error) {
 	if packagedRunner != "" && cfg.ServiceName == CatchService {
-		return nil, fmt.Errorf("use nixos-rebuild to update the Yeet OS host")
+		return nil, fmt.Errorf("use sudo yeet-os upgrade to update the Yeet OS host")
 	}
 	si := &Installer{
 		icfg: cfg,

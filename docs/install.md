@@ -144,9 +144,9 @@ If the network goes down after the disk installation finishes, boot the installe
 
 The same public ISO accepts an unattended seed. The live SSH login is disabled when booting with a seed. To build the generic ISO yourself on x86-64 Linux, run `nix build .#installer` in this checkout.
 
-Prepare a second volume labeled `YEETSEED`. Put these two files at its root. Anyone with access to this volume can read the enclosed key until it is consumed or expires.
+Prepare a second volume labeled `YEETSEED`. Put these two files at its root. Keep this volume private. Its OAuth secret can enroll additional tagged devices until you revoke it.
 
-- `yeet-host.key` holds a single-use, **non-ephemeral**, preauthorized Tailscale auth key with the `tag:catch` tag.
+- `tailnet.oauth` holds your Tailscale OAuth client secret. A Yeet-server-only installation can instead supply a tagged one-time auth key via `auth_key_file` and omit the `tailnet` settings.
 - `install.json` names the disk to erase and the host to enroll. Replace the public key and disk identifiers below with the destination machine's actual values. Check them with `lsblk -d -o PATH,MODEL,SERIAL,SIZE` from the installer rescue shell.
 
 ```json
@@ -157,7 +157,9 @@ Prepare a second volume labeled `YEETSEED`. Put these two files at its root. Any
   "serial": "YOUR-DISK-SERIAL",
   "hostname": "yeet-home",
   "ssh_public_key": "ssh-ed25519 REPLACE_WITH_YOUR_WORKSTATION_PUBLIC_KEY",
-  "auth_key_file": "yeet-host.key",
+  "oauth_secret_file": "tailnet.oauth",
+  "catchHostname": "yeet-minilab",
+  "tailnet": {"osTag": "tag:yeet-host", "serviceTag": "tag:app", "autoServices": true},
   "on_success": "poweroff"
 }
 ```
@@ -174,3 +176,18 @@ xorriso -as mkisofs -V YEETSEED -J -r -o yeet-seed.iso seed/
 Attach the installer and the seed, choose the installer as the boot device and start the machine. Follow progress on the console with `journalctl -fu yeet-autoinstall`. An unattended seed refuses a mounted disk and a disk already containing a Yeet OS root. For an explicitly mounted seed, the rescue shell also accepts `yeet-setup --config /path/to/install.json`.
 
 After the host powers off, eject both volumes, boot from disk, and run the workstation commands above. Remove the temporary seed and its key after provisioning.
+
+
+### Tailscale identities and recovery
+
+The full Tailscale setup uses one OAuth client secret. The wizard checks tag
+permissions before partitioning. It enrolls the OS and Yeet server separately
+and retains the secret in the Yeet server’s private data directory so it can
+enroll new services later. To rotate it, run `yeet tailscale --setup`.
+
+On a host with separate data disks, the native Tailscale state is in
+`os-tailscale/` under the selected Yeet host data directory. Recovery uses this
+state along with the Yeet server identity, service state and saved network
+settings. Keep the former host offline. For a machine coming from another OS,
+back up its native `/var/lib/tailscale/` before removing the boot disk if you
+want to retain its Tailscale device ID. Its Yeet server has a separate identity.

@@ -439,11 +439,8 @@ func NewFileInstaller(s *Server, cfg FileInstallerCfg) (*FileInstaller, error) {
 }
 
 func newFileInstaller(s *Server, cfg FileInstallerCfg, serviceLockHeld bool) (_ *FileInstaller, retErr error) {
-	if packagedRunner != "" && cfg.ServiceName == CatchService {
-		return nil, fmt.Errorf("use nixos-rebuild to update the Yeet OS host")
-	}
-	if _, ok := reservedServiceNames[cfg.ServiceName]; ok {
-		return nil, fmt.Errorf("%s is a reserved service name", cfg.ServiceName)
+	if err := validateFileInstallerServiceName(cfg.ServiceName); err != nil {
+		return nil, err
 	}
 	releaseServiceLock := func() {}
 	if !serviceLockHeld {
@@ -455,7 +452,12 @@ func newFileInstaller(s *Server, cfg FileInstallerCfg, serviceLockHeld bool) (_ 
 			releaseServiceLock()
 		}
 	}()
-	existingService, resolvedRoot, rootExisted, err := prepareNewFileInstaller(s, cfg)
+	existingService, err := s.serviceView(cfg.ServiceName)
+	if err != nil && !errors.Is(err, errServiceNotFound) {
+		return nil, err
+	}
+	applyHostNetworkDefaults(&cfg, existingService)
+	resolvedRoot, rootExisted, err := prepareNewFileInstaller(s, cfg, existingService)
 	if err != nil {
 		return nil, err
 	}
@@ -479,22 +481,53 @@ func newFileInstaller(s *Server, cfg FileInstallerCfg, serviceLockHeld bool) (_ 
 	return i, nil
 }
 
-func prepareNewFileInstaller(s *Server, cfg FileInstallerCfg) (db.ServiceView, resolvedServiceRoot, bool, error) {
-	existing := First(s.serviceView(cfg.ServiceName))
+func validateFileInstallerServiceName(name string) error {
+	if packagedRunner != "" && name == CatchService {
+		return errors.New("use sudo yeet-os upgrade to update the Yeet OS host")
+	}
+	if _, ok := reservedServiceNames[name]; ok {
+		return fmt.Errorf("%s is a reserved service name", name)
+	}
+	return nil
+}
+
+func applyHostNetworkDefaults(cfg *FileInstallerCfg, existing db.ServiceView) {
+	tag := os.Getenv("YEET_SERVICE_TS_TAG")
+	if tag == "" || cfg.EnvFile || cfg.ServiceName == CatchService || cfg.ServiceName == SystemService {
+		return
+	}
+	initialized := serviceRunInitialized(existing)
+	if initialized && reflect.DeepEqual(cfg.Network, NetworkOpts{}) {
+		cfg.Network = networkOptsFromDesired(desiredServiceNetworkConfig(existing), "")
+		return
+	}
+	if !initialized && cfg.Network.Interfaces == "" && os.Getenv("YEET_AUTO_SERVICE_TS") == "1" {
+		cfg.Network.Interfaces = "svc,ts"
+	}
+	applyDefaultServiceTag(&cfg.Network, tag)
+}
+
+func applyDefaultServiceTag(network *NetworkOpts, tag string) {
+	if slices.Contains(strings.Split(network.Interfaces, ","), "ts") && len(network.Tailscale.Tags) == 0 && network.Tailscale.AuthKey == "" {
+		network.Tailscale.Tags = []string{tag}
+	}
+}
+
+func prepareNewFileInstaller(s *Server, cfg FileInstallerCfg, existing db.ServiceView) (resolvedServiceRoot, bool, error) {
 	if err := validateFileInstallerSandboxCarrier(cfg, existing); err != nil {
-		return db.ServiceView{}, resolvedServiceRoot{}, false, err
+		return resolvedServiceRoot{}, false, err
 	}
 	if err := validateExistingRunSandbox(cfg, existing); err != nil {
-		return db.ServiceView{}, resolvedServiceRoot{}, false, err
+		return resolvedServiceRoot{}, false, err
 	}
 	root, existed, err := s.prepareFileInstallerRoot(cfg)
 	if err != nil {
-		return db.ServiceView{}, resolvedServiceRoot{}, false, err
+		return resolvedServiceRoot{}, false, err
 	}
 	if err := validateExistingRunNetwork(cfg, existing); err != nil {
-		return db.ServiceView{}, resolvedServiceRoot{}, false, err
+		return resolvedServiceRoot{}, false, err
 	}
-	return existing, root, existed, nil
+	return root, existed, nil
 }
 
 func validateFileInstallerSandboxCarrier(cfg FileInstallerCfg, existing db.ServiceView) error {

@@ -14,27 +14,28 @@ Or download it from a terminal with curl.
 curl -fL --retry 3 -o yeet-os-installer.iso https://github.com/yeetrun/yeet-os/releases/latest/download/yeet-os-installer.iso
 ```
 
-You’ll need a spare disk of at least 10 GiB that you can erase, a wired network connection, and access to the machine’s screen or VM console. For SSH access after installation, have your GitHub username or an SSH public key handy. Yeet uses Tailscale to connect your laptop to the installed host. Your Tailscale account needs permission to give the host the `tag:catch` tag. [Tailscale setup](yeet-nix/website/docs/concepts/tailscale.mdx)
+You’ll need a spare disk of at least 10 GiB that you can erase, a wired network connection, and access to the machine’s screen or VM console. For SSH access after installation, have your GitHub username or an SSH public key handy. Yeet uses Tailscale to connect your laptop to the installed host. For automatic setup, create a Tailscale OAuth client with **Auth Keys write** and permission to assign your machine, Yeet server, and service tags. [Tailscale setup](yeet-nix/website/docs/concepts/tailscale.mdx)
 
 1. **Boot the installer.** Write the ISO to a USB stick and boot from it, or attach it to a VM as a virtual DVD. The installer gets an IP address with DHCP. Press **N** at the console if you need to set an address yourself.
 2. **Open the installer on your laptop.** The console shows an SSH command like `ssh -p 2222 -t root@192.168.1.42` and a password for this boot. From the same LAN, run the command shown on **your** screen. Match the SSH fingerprint to the one on the console, then enter the password. The setup menu opens right in your terminal. You can also press **Enter** at the console to use the same menu there.
 3. **Choose where your apps will live.** Select **Install a fresh host** and pick the OS disk to erase. For a single-disk machine, choose **Keep both on the OS disk**. If you want to be able to replace the boot disk later, put both Yeet’s host data and your app files on separate ZFS storage.
-4. **Set up access and install.** Choose a hostname and network settings, then choose **Import keys from GitHub** and enter your username. Review the fingerprint of each key and choose the ones you use. You can also paste a public key. Set a password for the local console. Review the disk selection before confirming. When prompted, scan the QR code or open the link to sign in to Tailscale. Note the Yeet host address shown by the installer.
+4. **Set up access and install.** Choose a hostname and network settings, then choose **Import keys from GitHub** and enter your username. Review the fingerprint of each key and choose the ones you use. You can also paste a public key. Set a password for the local console. Review the disk selection before confirming. Choose **Connect the machine, Yeet server and services** and paste your OAuth client secret. For a machine named `minilab`, setup suggests `yeet-minilab` for the Yeet server. Both names are editable.
 5. **Boot from disk.** On the final screen, press **Enter** to power off. Once the machine is off, pull the USB stick or eject the ISO from the VM’s virtual CD/DVD drive. Turn it back on.
 
 ## Deploy your first app
 
-On a Mac or Linux laptop connected to the same Tailscale network, install the CLI and point it at the host address from the installer. This example uses `yeet-home`.
+On a Mac or Linux laptop connected to the same Tailscale network, install the CLI and point it at the host address from the installer. This example uses `yeet-minilab`.
 
 ```sh
 curl -fsSL https://yeetrun.com/install.sh | sh
-yeet config --host=yeet-home
+yeet config --host=yeet-minilab
 mkdir -p ~/yeet-apps/web && cd ~/yeet-apps/web
-yeet run web nginx:alpine -p 8080:80
-yeet ssh -- curl -fsS http://127.0.0.1:8080/
+yeet run web nginx:alpine
+yeet service set web -p 80:80
+curl http://web/
 ```
 
-You should see the nginx welcome page’s HTML in your terminal. Yeet saves the app’s settings in `yeet.toml` in the directory where you ran the deploy.
+Yeet enrolls `web` on your tailnet when you deploy it. The second Yeet command publishes nginx’s HTTP port. With MagicDNS enabled and a tailnet grant for port 80, you should see the nginx welcome page. Use `ssh yeet@minilab` if your workstation has access to port 22 on the machine tag.
 
 ## What you can do with Yeet OS
 
