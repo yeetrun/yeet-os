@@ -8,7 +8,9 @@ Boot the machine on a wired network with DHCP. The physical or VM console shows 
 
 Press **N** on the console to change live network settings if needed, or **Enter** to use the wizard locally. The SSH password and host key change whenever you reboot the ISO. If SSH remembers an earlier installer at that address, check the new fingerprint at the console before removing the old entry with `ssh-keygen -R '[192.168.1.42]:2222'`, substituting the actual address.
 
-Choose a hostname, DHCP or static IPv4 for the installed host, and paste your workstation’s SSH **public** key for access after reboot. Set a separate local console password. To join Tailscale, open the login URL or scan the QR code when prompted, or paste a single-use preauthorized, non-ephemeral auth key for `tag:catch` during setup. The installed system accepts SSH keys on port 22. [Tailscale permissions](../yeet-nix/website/docs/concepts/tailscale.mdx)
+Choose a hostname and DHCP or static IPv4 for the installed host. At **SSH into the installed host**, choose **Import keys from GitHub** and enter the GitHub username where you keep your public SSH keys. For each fingerprint, choose **Use this key** or **Skip this key**. To check your laptop’s fingerprint, run `ssh-keygen -lf ~/.ssh/id_ed25519.pub` (use your own public key’s path). Anyone with a matching private key can sign in as `yeet` and use sudo. The installer copies the keys you select once. Later changes on GitHub do not change access on the host.
+
+You can also choose **Paste a public key** or **Use the local console only**. Set a separate local console password. To join Tailscale, open the login URL or scan the QR code when prompted, or paste a single-use preauthorized, non-ephemeral auth key for `tag:catch` during setup. The installed system accepts SSH keys on port 22. [Tailscale permissions](../yeet-nix/website/docs/concepts/tailscale.mdx)
 
 ## Prepare a private installer
 

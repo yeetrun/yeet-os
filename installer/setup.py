@@ -11,7 +11,10 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from http.client import HTTPException
+from urllib.error import HTTPError
 from urllib.parse import urlparse
+from urllib.request import urlopen
 
 from provision import (
     SetupError,
@@ -22,6 +25,7 @@ from provision import (
     locked,
     machine_profile,
     run,
+    ssh_fingerprint,
     validate_network,
 )
 
@@ -86,6 +90,76 @@ def installer_ssh_endpoints():
     if len(connection) == 4:
         return [(connection[2], int(connection[3]))]
     return [(host, 2222) for host in live_addresses()]
+
+
+def github_keys(username):
+    if not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9_-]{0,37}[a-zA-Z0-9])?", username):
+        raise SetupError("Enter your GitHub username, such as octocat.")
+    url = f"https://github.com/{username}.keys"
+    limit = 256 * 1024
+    try:
+        with urlopen(url, timeout=10) as response:
+            if response.geturl() != url:
+                raise SetupError("GitHub redirected this username. Check the account name.")
+            data = response.read(limit + 1)
+    except HTTPError as exc:
+        if exc.code == 404:
+            raise SetupError(f"GitHub could not find @{username}. Check the username.") from exc
+        raise SetupError(f"GitHub returned HTTP {exc.code}. Try again or paste a key.") from exc
+    except (OSError, HTTPException) as exc:
+        raise SetupError("Could not reach GitHub. Check the network or paste a key.") from exc
+    if len(data) > limit:
+        raise SetupError("The GitHub key list is too large. Paste a key instead.")
+    try:
+        lines = data.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise SetupError("Could not read GitHub’s key list. Try pasting a key.") from exc
+    keys = {}
+    for line in lines:
+        if line.strip():
+            fingerprint = ssh_fingerprint(line)
+            keys.setdefault(fingerprint, line)
+    if not keys:
+        raise SetupError(f"@{username} has no public SSH keys on GitHub.")
+    return keys
+
+
+def choose_login_keys(ui):
+    step = "SSH ACCESS"
+    message = "Choose how you’ll sign in as yeet after reboot."
+    while True:
+        choice = ui.choose(step, "SSH into the installed host", message, [
+            "Import keys from GitHub", "Paste a public key", "Use the local console only",
+        ])
+        if choice == 2:
+            return []
+        try:
+            if choice == 1:
+                key = ui.field(step, "Paste a public key", "Paste the contents of your .pub file.",
+                               limit=16384).strip()
+                ssh_fingerprint(key)
+                return [key]
+            username = ui.field(step, "Your GitHub username",
+                                "Use the account where you added your SSH keys.").strip()
+            ui.page(step, "Looking up public keys", f"Checking GitHub for @{username}…")
+            keys = github_keys(username)
+        except SetupError as exc:
+            message = str(exc)
+            continue
+        selected = []
+        for index, (fingerprint, key) in enumerate(keys.items(), 1):
+            choice = ui.choose(step, f"Key {index} of {len(keys)} from @{username}",
+                               f"{key.split()[0]}\n{fingerprint}\n"
+                               "Anyone with the matching private key can sign in as yeet and use sudo.",
+                               ["Use this key", "Skip this key", "Start over"])
+            if choice == 2:
+                break
+            if choice == 0:
+                selected.append(key)
+        else:
+            if selected:
+                return selected
+        message = "Choose how you’ll sign in as yeet after reboot."
 
 
 def static_addresses(ui):
@@ -496,7 +570,7 @@ class Console:
                     else fresh_layout(self, name, machine)
                 )
                 password = ""
-                public_key = machine["sshPublicKey"] if machine else ""
+                public_keys = [machine["sshPublicKey"]] if machine else []
                 network = None
                 auth_key = ""
                 if not machine:
@@ -518,13 +592,7 @@ class Console:
                             mode="static", interface=nic, **static_addresses(self)
                         )
                         validate_network(network)
-                    public_key = self.field(
-                        "SSH ACCESS",
-                        "SSH into the installed host",
-                        "Paste your workstation’s SSH public key to sign in as yeet. "
-                        "Leave blank for console access only. The live SSH password expires on reboot.",
-                        limit=16384,
-                    ).strip()
+                    public_keys = choose_login_keys(self)
                     password = self.field(
                         "LOCAL ACCESS",
                         "Set a console password",
@@ -555,6 +623,10 @@ class Console:
                 summary = [
                     f"Erase {disk}   {dev['model'] or 'Disk'}   {dev['size'] / 1024**3:.1f} GiB",
                     f"Host   {name}",
+                    "SSH login as yeet   " + (
+                        f"{len(public_keys)} authorized " + ("key" if len(public_keys) == 1 else "keys")
+                        if public_keys else "No public keys"
+                    ),
                 ]
                 if layout:
                     from zfs_keys import verified_keys
@@ -609,7 +681,7 @@ class Console:
                     password=password,
                     network=network,
                     layout=layout,
-                    ssh_public_key=public_key,
+                    ssh_public_keys=public_keys,
                     source_offline=bool(recovery),
                     recover_dataset=recovery[0] if recovery else None,
                     legacy=recovery[1].get("legacy") if recovery else None,

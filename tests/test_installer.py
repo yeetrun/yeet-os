@@ -1,4 +1,6 @@
+import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -10,6 +12,82 @@ import provision
 
 
 class InstallerTests(unittest.TestCase):
+    def test_github_keys_are_reviewed_and_installed_once(self):
+        import setup
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            keys = []
+            for name in ["laptop", "old", "desktop"]:
+                path = root / name
+                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)],
+                               check=True)
+                keys.append(path.with_suffix(".pub").read_text().strip())
+            reply = io.BytesIO(("\n".join(keys + [keys[0]]) + "\n").encode())
+            reply.geturl = lambda: "https://github.com/example.keys"
+            ui = Mock()
+            ui.choose.side_effect = [0, 0, 1, 0]
+            ui.field.return_value = "example"
+            with patch.object(setup, "urlopen", return_value=reply) as fetch:
+                selected = setup.choose_login_keys(ui)
+            fetch.assert_called_once_with(reply.geturl(), timeout=10)
+            self.assertEqual(selected, [keys[0], keys[2]])
+            for key, screen in zip(keys, ui.choose.call_args_list[1:]):
+                self.assertIn("@example", screen.args[1])
+                self.assertIn(provision.ssh_fingerprint(key), screen.args[2])
+
+            disk = "/dev/lab-target"
+            plan = dict(version=1, disk=disk, erase=disk, hostname="lab", ssh_public_keys=selected)
+            with patch.object(provision, "disks", return_value=[{"path": disk}]):
+                provision.validate(plan)
+                with self.assertRaises(provision.SetupError):
+                    provision.validate(plan | {"ssh_public_keys": [keys[0], "malformed"]})
+                with self.assertRaises(provision.SetupError):
+                    provision.validate(plan | {"ssh_public_keys": [keys[0] + "\n" + keys[2]]})
+            provision.configure_access(root, plan)
+            staged = root / "var/lib/yeet-os/installer-key"
+            self.assertEqual(staged.read_text().splitlines(), selected)
+            self.assertEqual(staged.stat().st_mode & 0o777, 0o600)
+            # Existing prepared profiles and unattended seeds still use a single key.
+            provision.configure_access(root, {"ssh_public_key": keys[1]})
+            self.assertEqual(staged.read_text(), keys[1] + "\n")
+
+    def test_github_errors_allow_another_sign_in_method(self):
+        import setup
+        from urllib.error import HTTPError
+
+        url = "https://github.com/example.keys"
+        for response, error, detail in [
+            (b"", None, "no public SSH keys"),
+            (b"not an OpenSSH key", None, "Expected an OpenSSH"),
+            (b"x" * (256 * 1024 + 1), None, "too large"),
+            (b"", HTTPError(url, 404, "", {}, None), "could not find"),
+            (b"", TimeoutError(), "reach GitHub"),
+        ]:
+            with self.subTest(detail=detail):
+                reply = io.BytesIO(response)
+                reply.geturl = lambda: url
+                ui = Mock()
+                ui.field.return_value = "example"
+                ui.choose.side_effect = [0, 2]
+                with patch.object(setup, "urlopen", return_value=reply, side_effect=error):
+                    self.assertEqual(setup.choose_login_keys(ui), [])
+                self.assertIn(detail, ui.choose.call_args.args[2])
+        with patch.object(setup, "urlopen") as fetch, self.assertRaises(provision.SetupError):
+            setup.github_keys("example/another")
+        fetch.assert_not_called()
+
+    def test_declining_github_keys_can_fall_back_to_paste(self):
+        import setup
+
+        ui = Mock()
+        ui.choose.side_effect = [0, 0, 2, 1]
+        ui.field.side_effect = ["example", "pasted key"]
+        with patch.object(setup, "github_keys", return_value={"fp1": "first", "fp2": "second"}), \
+             patch.object(setup, "ssh_fingerprint") as validate:
+            self.assertEqual(setup.choose_login_keys(ui), ["pasted key"])
+        validate.assert_called_once_with("pasted key")
+
     def test_key_screen_updates_without_input_after_verification(self):
         import setup
 

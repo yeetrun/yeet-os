@@ -75,6 +75,35 @@ def disks():
     ]
 
 
+def login_keys(config):
+    # Version 1 seeds and prepared installers can supply a single key.
+    key = config.get("ssh_public_key", "")
+    if "ssh_public_keys" not in config:
+        return [key] if key else []
+    keys = config["ssh_public_keys"]
+    if key or not isinstance(keys, list):
+        raise SetupError("Supply a list of SSH public keys or one ssh_public_key.")
+    return keys
+
+
+def ssh_fingerprint(key):
+    if not isinstance(key, str) or not key.replace("\t", " ").isprintable():
+        raise SetupError("Enter one OpenSSH public key per line.")
+    fields = key.split()
+    if len(fields) < 2 or fields[0] not in (
+        "ssh-ed25519", "ssh-rsa",
+        "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+        "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com",
+    ):
+        raise SetupError("Expected an OpenSSH public key, such as ssh-ed25519.")
+    try:
+        info = run("ssh-keygen", "-E", "sha256", "-lf", "-",
+                   stdin=" ".join(fields[:2]) + "\n")
+    except SetupError as exc:
+        raise SetupError("OpenSSH could not read this public key.") from exc
+    return info.split()[1]
+
+
 def validate(config):
     if not re.fullmatch(
         r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", config.get("hostname", "")
@@ -96,14 +125,10 @@ def validate(config):
         raise SetupError(
             "The selected disk is absent, in use, too small or has a different serial."
         )
-    key = config.get("ssh_public_key", "")
-    if key:
-        if "\n" in key or not key.startswith(
-            ("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-", "sk-")
-        ):
-            raise SetupError("Provide one OpenSSH public key.")
-        run("ssh-keygen", "-l", "-f", "/dev/stdin", stdin=key + "\n")
-    if not key and not config.get("password") and not config.get("password_hash"):
+    keys = login_keys(config)
+    for key in keys:
+        ssh_fingerprint(key)
+    if not keys and not config.get("password") and not config.get("password_hash"):
         raise SetupError("Set a console password or supply an SSH public key.")
     digest = config.get("password_hash", "")
     if digest and not re.fullmatch(r"\$(?:6|y)\$[./a-zA-Z0-9$=,]+", digest):
@@ -150,9 +175,10 @@ def partition(disk, firmware):
 
 
 def configure_access(root, config):
-    if config.get("ssh_public_key"):
-        # First boot installs the key as the login user, even on a reused /home.
-        private_write(root / "var/lib/yeet-os/installer-key", config["ssh_public_key"] + "\n")
+    keys = login_keys(config)
+    if keys:
+        # First boot installs these keys as the login user, even on a reused /home.
+        private_write(root / "var/lib/yeet-os/installer-key", "\n".join(keys) + "\n")
     digest = config.get("password_hash")
     if config.get("password"):
         digest = run(
