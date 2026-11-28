@@ -1,0 +1,170 @@
+---
+title: Data Layout
+description: Where catch puts live host state, service roots, generated files, and recovery points.
+---
+
+Catch stores live state on each host under its data directory. You usually do
+not need to edit these files directly, but the layout helps when you inspect a
+host or plan service roots.
+
+You do not need to memorize the tree. Know which directory is disposable and
+which one contains data you intend to keep.
+
+## Data directory
+
+Fresh installations default to `/var/lib/yeet`.
+The default service root follows the data directory at
+`<data-dir>/services`, so the fresh default is `/var/lib/yeet/services`.
+Pass `--data-dir` or `--services-root` when the host needs a different path.
+Pick roots you are willing to back up, monitor, and explain later.
+
+```text
+<data-dir>/
+  db.json
+  services/
+  mounts/
+  registry/
+  tsnet/
+```
+
+Use [Host Setup](/docs/getting-started/host-setup) for first-time host
+setup and [catch reference](/docs/cli/catch-cli) for manual catch flags.
+
+## Service roots
+
+By default, services live under:
+
+```text
+<data-dir>/services/<svc>/
+```
+
+Set a custom service root at first deploy:
+
+```bash
+yeet run <svc> ./compose.yml --service-root=/srv/apps/<svc>
+```
+
+Use a ZFS dataset as the service root:
+
+```bash
+yeet run <svc> ./compose.yml --service-root=tank/apps/<svc> --zfs
+```
+
+Inside a service root, the common directories are:
+
+```text
+<service-root>/
+  bin/
+  run/
+  data/
+  env/
+```
+
+- `bin/` contains install artifacts such as binaries, compose files, and units.
+- `run/` contains runtime files.
+- `data/` contains persistent application data.
+- `env/` contains environment files managed by `yeet env`.
+
+## Moving roots
+
+`yeet run` can set the root for a new service. Stop an existing service before
+moving its root with `yeet service set`. Moving storage while the process is
+writing to it can corrupt or lose data.
+
+```bash
+yeet stop <svc>
+yeet service set <svc> --service-root=/srv/apps/<svc> --copy
+yeet start <svc>
+```
+
+Use `--empty` instead of `--copy` when you want a new empty root.
+
+For ZFS-backed moves:
+
+```bash
+yeet stop <svc>
+yeet service set <svc> --service-root=tank/apps/<svc> --zfs --copy
+yeet start <svc>
+```
+
+Parent directories or parent datasets must already exist. `yeet service set`
+leaves the old root in place as a rollback handle until you decide otherwise.
+
+## Reconfigure host storage
+
+Use `yeet host set` when you want to change the catch data directory or the
+default root for future services. This is a host-level change, so inspect first
+and read the plan before applying it:
+
+```bash
+yeet info
+yeet host set --data-dir=/srv/yeet-data
+yeet host set --services-root=/srv/yeet-services --migrate-services=all
+yeet host set --zfs --data-dir=flash/yeet/data --services-root=flash/yeet/services --migrate-services=all
+```
+
+For the exact recorded legacy home-directory layout, move all eligible state to
+the filesystem defaults and then remove the inactive source separately:
+
+```bash
+yeet host set \
+  --data-dir=/var/lib/yeet \
+  --services-root=/var/lib/yeet/services \
+  --migrate-services=all \
+  --yes
+yeet host cleanup --from=/root/yeet-data --yes
+```
+
+
+Run `yeet info` to inspect the current host data directory, services root, catch
+service root, and service/VM inventory. Use `yeet info --host=<catch-host>` when
+you want to inspect a host other than the current default.
+
+Changing the data directory copies catch state, reinstalls the catch unit, and
+restarts catch. Changing the default services root affects services that still
+live under the previous default root. With `--migrate-services=all`, yeet stops
+those services, moves their roots, updates catch, and starts services that were
+running before the move. With `--migrate-services=none`, those services stay at
+their current roots and continue to run there.
+
+For a generic custom host-storage migration, `yeet host set` validates the new
+Catch and service state but never deletes the old source. After validation, run
+`yeet host cleanup --from=<exact-journaled-source> --yes` explicitly. Cleanup
+accepts only that exact journaled inactive source, revalidates the active state,
+and refuses arbitrary paths. If deletion alone fails, rerun the cleanup command
+to resume the pending removal. Explicit custom roots are preserved throughout
+this workflow.
+
+With `--zfs`, `--data-dir` and `--services-root` are dataset names. The
+services root is a dataset prefix: migrated services and `catch` use child
+datasets such as `flash/yeet/services/<svc>`.
+
+ZFS datasets are not copied or deleted implicitly. Custom and nested datasets
+stay in place unless you manage them explicitly.
+
+If you omit `--migrate-services` in an interactive terminal, yeet asks whether
+to migrate affected services. With `--yes`, pass `--migrate-services=all` or
+`--migrate-services=none` explicitly. After a migration, yeet updates matching
+entries in the local `yeet.toml`; pass `--config ./yeet.toml` when you run the
+command outside the project directory.
+
+## Local replay config
+
+`yeet.toml` stores the local recipe for future runs. Catch stores the live root
+on the host. If they drift, sync the live settings back.
+
+If another checkout changes live service settings, sync them back:
+
+```bash
+yeet service sync <svc>
+yeet service sync --all
+```
+
+## ZFS snapshots
+
+ZFS-backed service roots can get yeet-managed recovery points before deploys,
+Docker image updates, and service-root moves. Use the ZFS guide for snapshot
+defaults, retention, clone-first recovery, and VM disk behavior:
+
+- [ZFS](/docs/concepts/zfs)
+- [Workflows: recover data](/docs/operations/workflows#recover-data)

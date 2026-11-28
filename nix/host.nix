@@ -1,7 +1,7 @@
 { config, lib, pkgs, ... }:
 let
   cfg = config.services.yeet-host;
-  package = pkgs.yeet-nix;
+  package = pkgs.yeet;
   unitDir = "/var/lib/yeet-systemd/etc/systemd/system";
   enrollmentFiles = [
     "|${cfg.dataDir}/tsnet/tailscaled.state"
@@ -133,7 +133,7 @@ in {
       "L+ /bin/rm - - - - ${pkgs.coreutils}/bin/rm"
     ];
     environment.etc."yeet-os/service-ns" = {
-      source = ../yeet-nix/pkg/netns/netns-scripts/service-ns;
+      source = ../yeet/pkg/netns/netns-scripts/service-ns;
       mode = "0555";
     };
     systemd.services.yeet-ns = {
@@ -146,7 +146,7 @@ in {
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        ExecStart = "${pkgs.bash}/bin/bash ${../yeet-nix/pkg/netns/netns-scripts/yeet-ns}";
+        ExecStart = "${pkgs.bash}/bin/bash ${../yeet/pkg/netns/netns-scripts/yeet-ns}";
       };
     };
     systemd.targets.yeet-docker-prereqs = {

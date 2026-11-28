@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Build the workstation assets consumed by install.sh and yeet upgrade.
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+mkdir -p "${1:?usage: build-cli OUTPUT [VERSION]}"
+out=$(cd "$1" && pwd)
+version=${2:-v$(cat "$root/VERSION")}
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$root/yeet"
+for os in darwin linux; do
+  for arch in arm64 amd64; do
+    name=yeet-$os-$arch
+    CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+      -ldflags="-s -w -X github.com/yeetrun/yeet/pkg/buildinfo.BuildVersion=$version" \
+      -o "$work/$name" ./cmd/yeet
+    tar -czf "$out/$name.tar.gz" -C "$work" "$name"
+    (cd "$out" && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+  done
+done
+cp install.sh "$out/install.sh"

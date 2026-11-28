@@ -1,0 +1,74 @@
+---
+title: Quick Start
+description: Fast path from empty host to one disposable service.
+---
+
+This is the shortest useful path: install `yeet`, prepare Tailscale, install
+`catch`, run a disposable container, and remove it.
+
+## Connect to your host
+
+Follow the [Yeet OS installation guide](https://github.com/yeetrun/yeet-os#install-yeet-os), then install Yeet on your workstation.
+
+```sh
+curl -fsSL https://github.com/yeetrun/yeet-os/releases/latest/download/install.sh | sh
+yeet config --host=yeet-minilab
+```
+
+Use the server name you chose in the installer.
+
+## 1. Confirm yeet can reach catch
+
+If setup saved a default host, these should work:
+
+```bash
+yeet version
+yeet status
+```
+
+The default catch hostname is `catch`. If you have more than one catch host, be
+explicit:
+
+```bash
+yeet --host=<catch-host> status
+```
+
+## 2. Choose a service workspace
+
+Create a directory for your apps.
+
+```sh
+mkdir -p ~/yeet-services && cd ~/yeet-services
+```
+
+## 3. Run a disposable service
+
+Start with nginx. It is small, familiar, and easy to delete.
+
+```bash
+yeet run -p 18080:80 hello nginx:alpine
+yeet status hello
+yeet logs hello
+```
+
+Check the published port from the host:
+
+```bash
+yeet ssh -- curl -fsS http://127.0.0.1:18080/ >/dev/null
+```
+
+## 4. Clean it up
+
+```bash
+yeet rm --clean hello
+```
+
+`--clean` deletes service data and removes the disposable `yeet.toml` entry.
+Read the prompt before accepting.
+
+## Next
+
+- New host: run [First-Run Validation](/docs/getting-started/first-run-validation).
+- Real service: read [Service Workspace](/docs/getting-started/service-workspace).
+- Day-to-day deploys: open [Workflows](/docs/operations/workflows).
+- Payload choices: start with [Payload Guides](/docs/payloads).

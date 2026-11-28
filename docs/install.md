@@ -10,7 +10,7 @@ Press **N** on the console to change live network settings if needed, or **Enter
 
 Choose a hostname and DHCP or static IPv4 for the installed host. At **SSH into the installed host**, choose **Import keys from GitHub** and enter the GitHub username where you keep your public SSH keys. For each fingerprint, choose **Use this key** or **Skip this key**. To check your laptop’s fingerprint, run `ssh-keygen -lf ~/.ssh/id_ed25519.pub` (use your own public key’s path). Anyone with a matching private key can sign in as `yeet` and use sudo. The installer copies the keys you select once. Later changes on GitHub do not change access on the host.
 
-You can also choose **Paste a public key** or **Use the local console only**. Set a separate local console password. To join Tailscale, open the login URL or scan the QR code when prompted, or paste a single-use preauthorized, non-ephemeral auth key for `tag:catch` during setup. The installed system accepts SSH keys on port 22. [Tailscale permissions](../yeet-nix/website/docs/concepts/tailscale.mdx)
+You can also choose **Paste a public key** or **Use the local console only**. Set a separate local console password. To join Tailscale, open the login URL or scan the QR code when prompted, or paste a single-use preauthorized, non-ephemeral auth key for `tag:catch` during setup. The installed system accepts SSH keys on port 22. [Tailscale permissions](../yeet/website/docs/concepts/tailscale.mdx)
 
 ## Prepare a private installer
 
@@ -22,7 +22,7 @@ nix --extra-experimental-features 'nix-command flakes' run github:yeetrun/yeet-o
 
 1. Choose a hostname (the suggested name is `yeet-home`) and your workstation’s SSH **public** key. A fresh install uses that hostname for the live OS, the installed OS, and the name Yeet requests on Tailscale. When recovering a host, Yeet reuses its saved Tailscale identity.
 2. Choose wired DHCP or static IPv4. For static networking, enter the host address with prefix, gateway and DNS servers. You can leave the adapter blank. The live installer selects a sole Ethernet adapter automatically or offers a choice on its console when several are present. The live installer and installed host both use these settings.
-3. Paste a **single-use, preauthorized, non-ephemeral** Tailscale auth key for `tag:catch`. Your tailnet policy must let your workstation reach the installer on TCP 22 and reach your Yeet host after installation. [Create an auth key](https://tailscale.com/kb/1085/auth-keys) · [Yeet tailnet grants](../yeet-nix/website/docs/concepts/tailscale.mdx)
+3. Paste a **single-use, preauthorized, non-ephemeral** Tailscale auth key for `tag:catch`. Your tailnet policy must let your workstation reach the installer on TCP 22 and reach your Yeet host after installation. [Create an auth key](https://tailscale.com/kb/1085/auth-keys) · [Yeet tailnet grants](../yeet/website/docs/concepts/tailscale.mdx)
 4. Choose where to save the ISO. Nix builds the public system, then the workstation adds the enrollment key to the private ISO. Anyone who can read the ISO can use its key until consumed or expired. Keep it outside the repository. Write it to USB or attach it as a virtual CD, then boot it.
 
 From your workstation, use the assigned tailnet name. OpenSSH authenticates with the public key you selected. If the machine cannot get online, the physical or hypervisor console offers the same storage wizard.

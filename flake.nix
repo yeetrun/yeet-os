@@ -1,19 +1,19 @@
 {
-  description = "Yeet OS and its NixOS-native Yeet fork";
+  description = "Yeet OS and the Yeet CLI";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
   outputs = { self, nixpkgs }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       each = nixpkgs.lib.genAttrs systems;
-      yeetOverlay = import ./yeet-nix/overlay.nix;
+      yeetOverlay = import ./yeet/overlay.nix;
       packagesModule.nixpkgs.overlays = [ yeetOverlay ];
       osSource = nixpkgs.lib.fileset.toSource {
         root = ./.;
         fileset = nixpkgs.lib.fileset.unions [
-          ./VERSION ./flake.nix ./flake.lock ./.tack/pins.toml ./.tack/pins.lock.json
-          ./nix ./installer ./yeet-nix/cmd ./yeet-nix/pkg
-          ./yeet-nix/flake.nix ./yeet-nix/flake.lock ./yeet-nix/overlay.nix ./yeet-nix/package.nix
-          ./yeet-nix/go.mod ./yeet-nix/go.sum ./yeet-nix/README.md ./yeet-nix/website/docs
+          ./VERSION ./yeet/VERSION ./flake.nix ./flake.lock ./.tack/pins.toml ./.tack/pins.lock.json
+          ./nix ./installer ./yeet/cmd ./yeet/pkg
+          ./yeet/flake.nix ./yeet/flake.lock ./yeet/overlay.nix ./yeet/package.nix
+          ./yeet/go.mod ./yeet/go.sum ./yeet/README.md ./yeet/website/docs
         ];
       };
       appliance = {
@@ -62,9 +62,10 @@
       nixosModules.default.imports = [ packagesModule ./nix/host.nix ];
       nixosConfigurations = each host // { yeet-uefi = installed null "uefi"; yeet-bios = installed null "bios"; };
       packages = each (system: {
-        yeet-nix = (nixpkgs.legacyPackages.${system}.extend yeetOverlay).yeet-nix;
+        yeet = (nixpkgs.legacyPackages.${system}.extend yeetOverlay).yeet;
+        yeet-nix = self.packages.${system}.yeet;
         yeet-os = nixpkgs.legacyPackages.${system}.callPackage ./nix/update-tool.nix {};
-        default = self.packages.${system}.yeet-nix;
+        default = self.packages.${system}.yeet;
         image = (host system).config.system.build.image;
       } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
         installer = (installer null).config.system.build.isoImage;

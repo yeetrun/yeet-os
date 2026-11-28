@@ -9,7 +9,7 @@ nix --extra-experimental-features 'nix-command flakes' build .#image
 ls -lh result/yeet-os.qcow2
 ```
 
-The output is a UEFI QCOW2 disk. The flake also exports the Yeet client and host binaries as `packages.<system>.yeet-nix` for x86-64 and ARM64 Linux. Firecracker VM payloads require x86-64 and access to KVM and TUN in the host.
+The output is a UEFI QCOW2 disk. The flake also exports the Yeet client and host binaries as `packages.<system>.yeet` for x86-64 and ARM64 Linux. Firecracker VM payloads require x86-64 and access to KVM and TUN in the host.
 
 On Proxmox, copy the QCOW2 to the hypervisor, then run the following as root. Choose an unused VM ID, a disk storage, the LAN bridge, and the public key you will use to sign in. The example provisions 6 GiB of RAM and a 40 GiB workload disk. Size both for the payloads you intend to run.
 
@@ -46,9 +46,9 @@ journalctl -u catch -n 30
 test -s /var/lib/yeet/tsnet/tailscaled.state && rm -f /run/yeet-enrollment.env
 ```
 
-The existing Yeet tailnet grants apply. A host auth key connects the Yeet host to Tailscale. Workloads requesting their own Tailscale identity also need an authorized service enrollment credential. Yeet accepts `TS_CLIENT_SECRET` in the same enrollment file and persists it for service provisioning. Keep credentials outside the flake and VM image. [Tailnet permissions and service tags](../yeet-nix/website/docs/concepts/tailscale.mdx)
+The existing Yeet tailnet grants apply. A host auth key connects the Yeet host to Tailscale. Workloads requesting their own Tailscale identity also need an authorized service enrollment credential. Yeet accepts `TS_CLIENT_SECRET` in the same enrollment file and persists it for service provisioning. Keep credentials outside the flake and VM image. [Tailnet permissions and service tags](../yeet/website/docs/concepts/tailscale.mdx)
 
-On your workstation, use the existing Yeet client and your usual service workspace. To build the fork's client locally, run `cd yeet-nix && mise exec -- go build -o ./yeet ./cmd/yeet` and invoke `./yeet` from that directory.
+On your workstation, use the existing Yeet client and your usual service workspace. To build the workstation client locally, run `cd yeet && mise exec -- go build -o ./yeet ./cmd/yeet` and invoke `./yeet` from that directory.
 
 ```bash
 export CATCH_HOST=yeet-os
@@ -65,7 +65,7 @@ The installed host also includes the CLI. Sign in over SSH as `yeet` and run `ye
 
 ## Build the Yeet binaries
 
-From a Linux checkout, run `nix build ./yeet-nix#catch`. The output includes `result/bin/catch`, `result/bin/yeet`, and `result/bin/yeet-enroll`. The OS imports the fork’s package overlay and builds these same binaries with its pinned nixpkgs.
+From a Linux checkout, run `nix build ./yeet#catch`. The output includes `result/bin/catch`, `result/bin/yeet`, and `result/bin/yeet-enroll`. The OS imports the Yeet package overlay and builds these same binaries with its pinned nixpkgs.
 
 ## Update an installed host
 
@@ -145,7 +145,7 @@ Yeet OS and the standalone Yeet flake share the nixpkgs pin in `.tack/`. From th
 ```sh
 tack look nixpkgs
 tools/update-nixpkgs
-git diff -- .tack/pins.lock.json flake.lock yeet-nix/flake.lock
+git diff -- .tack/pins.lock.json flake.lock yeet/flake.lock
 ```
 
 The release builder checks both flake locks against Tack before exporting assets. On a running host, `/run/current-system/yeet-os-source/.tack/pins.lock.json` records the upstream nixpkgs revision for that generation. The Yeet package and NixOS modules come from the same Yeet OS release.
@@ -178,12 +178,12 @@ Build the customized disk with `nix build .#nixosConfigurations.apps.config.syst
 
 On a fresh install, the installer configures `br0` when it can identify the wired uplink. The host gets its DHCP lease or static address on the bridge. For a custom host, set `services.yeet-host.lanUplink` to the physical interface, or set `services.yeet-host.lanBridge` to a bridge you already manage. Check the result with `catch vm-lan-bridge-status`. Each VM requesting `--net=lan` gets a TAP on that bridge when it starts. The NixOS configuration provides the shared service network, its DNS server, IP forwarding and Docker’s startup order. Yeet adds the network interfaces and unit dependencies specific to each payload as it starts.
 
-Yeet host data and app files live under `/var/lib/yeet`. Yeet writes workload units and their boot dependency links directly under `/var/lib/yeet-systemd`. The NixOS module adds this tree to systemd’s unit search path. A stopped, boot-enabled service starts again on reboot. A disabled service stays disabled even if you start it manually. Include both directories and any custom service roots or Docker volumes in host backups. For ZFS-backed service roots, enable ZFS in the site configuration, assign the host a stable `networking.hostId`, configure the pool for import at boot (for example with `boot.zfs.extraPools`), and provision the parent dataset before passing `--zfs`. [ZFS service roots and recovery points](../yeet-nix/website/docs/concepts/zfs.mdx)
+Yeet host data and app files live under `/var/lib/yeet`. Yeet writes workload units and their boot dependency links directly under `/var/lib/yeet-systemd`. The NixOS module adds this tree to systemd’s unit search path. A stopped, boot-enabled service starts again on reboot. A disabled service stays disabled even if you start it manually. Include both directories and any custom service roots or Docker volumes in host backups. For ZFS-backed service roots, enable ZFS in the site configuration, assign the host a stable `networking.hostId`, configure the pool for import at boot (for example with `boot.zfs.extraPools`), and provision the parent dataset before passing `--zfs`. [ZFS service roots and recovery points](../yeet/website/docs/concepts/zfs.mdx)
 
 ## Verify a deployment
 
 `catch host-check` checks the containerd socket, Docker configuration, workload account and a real unprivileged Bubblewrap invocation. From a workstation, `CATCH_HOST=apps ./tests/payloads.sh` deploys a uniquely named sandboxed service, verifies a staged update and rollback by reading the running payload's output, copies a file both ways and cleans up. Set `YEET_CLI` to an absolute path to exercise a particular client build.
 
-Run the fork's Go suite with `cd yeet-nix && mise exec -- go test ./...`. The [first-run playbook](../yeet-nix/website/docs/getting-started/first-run-validation.mdx) includes additional container, sandbox, cron, networking, VM and storage checks.
+Run the Go suite with `cd yeet && mise exec -- go test ./...`. The [first-run playbook](../yeet/website/docs/getting-started/first-run-validation.mdx) includes additional container, sandbox, cron, networking, VM and storage checks.
 
 To time a real deploy, run `CATCH_HOST=apps python3 tests/benchmark-run.py > timings.csv` on your workstation. The benchmark times a fresh script and an updated script with the regular CLI. It discards two warm-up pairs, verifies the running payload after each deploy and removes each temporary service.

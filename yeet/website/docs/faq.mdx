@@ -1,0 +1,77 @@
+---
+title: FAQ
+description: Short answers to the questions people usually ask after the first deploy.
+---
+
+## Is this intended for general use?
+
+Yeet targets homelab-style use by people comfortable operating Linux hosts over
+SSH. It is not a general-purpose platform or a multi-tenant orchestrator: use
+Linux/systemd hosts, Tailscale connectivity, and a single-operator trust model.
+
+Use yeet for infrastructure you control.
+
+## Does yeet require Tailscale?
+
+Yes. Catch joins your tailnet as an embedded Tailscale node, but the local
+`yeet` CLI does not run its own Tailscale client. Normal `yeet` commands use
+ordinary HTTP/WebSocket connections to the catch hostname, so your workstation
+must be able to reach that Tailscale address. In the normal setup, that means
+installing Tailscale locally and connecting the workstation to the same tailnet.
+Discovery commands such as `yeet list-hosts` also require the local Tailscale
+client API. See
+[Tailscale](/docs/concepts/tailscale). Access to catch commands is controlled
+with [Tailscale Access Grants](/docs/security/tailscale-access-grants).
+
+## Do services run as root?
+
+New native binaries, scripts, and cron jobs run as the shared, unprivileged
+`yeet-svc` account by default. Existing native services keep their current
+identity until you migrate one with `yeet service set <svc> --run-as=yeet-svc`.
+You can also select an existing account with `--run-as=<user>[:<group>]`.
+
+Docker users are controlled by Compose, VM applications are controlled inside
+the guest, and Catch plus host-management helpers remain root-owned. The shared
+default account is privilege reduction, not a security boundary between
+services, so use yeet for single-operator hosts you control rather than shared
+or multi-tenant environments.
+
+## Can I use docker compose?
+
+Yes. Provide a compose file to `yeet run`. Run it from your
+[Service Workspace](/docs/getting-started/service-workspace) so `yeet.toml`
+lands with the rest of your service files.
+
+```bash
+yeet run <svc> ./compose.yml
+```
+
+## Can I run VMs?
+
+Yes, on Linux catch hosts with KVM, TUN/TAP, and VM tooling available. Many VPS
+providers do not expose nested virtualization, so a host can be valid for
+containers and still not support VM payloads. See [VMs](/docs/payloads/vms).
+
+## How do I update a service?
+
+Re-run `yeet run` with the updated payload. For compose services, `yeet run`
+does not pull images by default; use `yeet run --pull <svc> ./compose.yml` or
+`yeet docker update <svc...>` when you want fresh images for selected services.
+That command pulls images and recreates containers. Use
+`yeet docker update --outdated` to update all compose services with available
+image updates.
+
+## What is the difference between a machine host and catch host?
+
+The machine host is the host you can SSH into as `yeet@<machine-host>`. The catch host is the Tailscale hostname yeet targets after
+install. Use the catch host with `CATCH_HOST`, `--host`, and
+`<svc>@<catch-host>`.
+
+SSH installs the daemon. Tailscale operates it. That split is the model.
+
+## What deletes data?
+
+`yeet rm <svc>` removes the service but keeps service data. It prompts before
+removing the local config entry. Use `yeet rm --clean <svc>` when you also want
+to delete the managed data root or VM disk and remove the local `yeet.toml`
+entry. Read the prompt before accepting.

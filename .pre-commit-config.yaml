@@ -6,72 +6,72 @@ repos:
         name: check shared nixpkgs pin
         entry: tools/update-nixpkgs --check
         language: system
-        files: ^(\.tack/pins\.(toml|lock\.json)|(yeet-nix/)?flake\.(nix|lock)|tools/update-nixpkgs)$
+        files: ^(\.tack/pins\.(toml|lock\.json)|(yeet/)?flake\.(nix|lock)|tools/update-nixpkgs)$
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-license-check
         name: yeet license check
-        entry: yeet-nix/tools/hooks/check-license
+        entry: yeet/tools/hooks/check-license
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
       - id: yeet-gofmt-check
         name: yeet gofmt check
-        entry: yeet-nix/tools/hooks/gofmt-check
+        entry: yeet/tools/hooks/gofmt-check
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-go-vet
         name: yeet go vet
-        entry: yeet-nix/tools/hooks/go-vet
+        entry: yeet/tools/hooks/go-vet
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-go-mod-tidy
         name: yeet go mod tidy
-        entry: yeet-nix/tools/hooks/go-mod-tidy-check
+        entry: yeet/tools/hooks/go-mod-tidy-check
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-staticcheck
         name: yeet staticcheck
-        entry: yeet-nix/tools/hooks/staticcheck
+        entry: yeet/tools/hooks/staticcheck
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-govulncheck
         name: yeet govulncheck
-        entry: yeet-nix/tools/hooks/govulncheck
+        entry: yeet/tools/hooks/govulncheck
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-private-info-scan
         name: yeet private info scan
-        entry: yeet-nix/tools/hooks/private-info-scan
+        entry: yeet/tools/hooks/private-info-scan
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-quality
         name: yeet coverage and quality gate
-        entry: yeet-nix/tools/hooks/quality
+        entry: yeet/tools/hooks/quality
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-depaware
         name: yeet depaware
-        entry: yeet-nix/tools/hooks/depaware-check
+        entry: yeet/tools/hooks/depaware-check
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-depaware-deps
         name: yeet depaware dependency check
-        entry: yeet-nix/tools/hooks/depaware-deps-check
+        entry: yeet/tools/hooks/depaware-deps-check
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: yeet-prepare-commit-msg
         name: yeet prepare commit message
-        entry: yeet-nix/tools/hooks/prepare-commit-msg
+        entry: yeet/tools/hooks/prepare-commit-msg
         language: system
         stages: [prepare-commit-msg]

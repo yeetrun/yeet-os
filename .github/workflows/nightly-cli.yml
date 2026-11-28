@@ -1,0 +1,29 @@
+name: Nightly CLI
+on:
+  push:
+    branches: [main]
+    paths: ['yeet/**', 'tools/build-cli', '.github/workflows/nightly-cli.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: nightly-cli
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: yeet/go.mod
+          cache-dependency-path: yeet/go.sum
+      - run: tools/build-cli dist "nightly-${GITHUB_SHA::7}"
+      - name: Publish the workstation preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f nightly "$GITHUB_SHA"
+          git push --force origin refs/tags/nightly
+          if ! gh release view nightly >/dev/null 2>&1; then
+            gh release create nightly --verify-tag --prerelease --latest=false --title "Nightly CLI" --notes "Workstation builds from main."
+          fi
+          gh release upload nightly dist/* --clobber

@@ -30,7 +30,7 @@ lib.mkIf (machine != null) {
       RuntimeDirectory = "yeet-live";
       RuntimeDirectoryMode = "0700";
       RuntimeDirectoryPreserve = "restart";
-      ExecStart = "${pkgs.yeet-nix}/bin/yeet-enroll --installer-ssh --hostname=${machine.hostname} --state=/run/yeet-live/tsnet --key-file=/iso/yeet-private/catch.key";
+      ExecStart = "${pkgs.yeet}/bin/yeet-enroll --installer-ssh --hostname=${machine.hostname} --state=/run/yeet-live/tsnet --key-file=/iso/yeet-private/catch.key";
     };
   };
 }

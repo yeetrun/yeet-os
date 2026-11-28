@@ -1,0 +1,232 @@
+# Repository Guidelines
+
+If `AGENTS.local.md` exists, read it and merge its instructions with this file.
+
+## Project Structure & Module Organization
+- `cmd/yeet`: Client CLI entrypoint and user-facing commands.
+- `cmd/catch`: Server/daemon entrypoint run on remote hosts.
+- `pkg/`: Core libraries shared by client/server (CLI parsing, services, installer, etc.).
+- `pkg/catchrpc`: JSON-RPC + WebSocket types/client shared by yeet/catch.
+- `example/`: Sample services and artifacts for demos.
+- `bin/`: Built binaries (local outputs).
+- `tools/`, `tempfork/`: Supporting tooling and forked dependencies.
+- Tests live alongside code as `*_test.go` files (primarily under `pkg/` and `cmd/`).
+
+## Agent Navigation
+
+- Start with `docs/agent/codebase-map.md` when choosing where to read or edit.
+- Subdirectories may contain their own `AGENTS.md`; read and follow the local
+  file before editing there.
+- Use `.codex/skills` for task workflows such as releases, docs, RPC, Docker,
+  and quality gates.
+- Keep this root file focused on repo-wide policy. Put subsystem-specific rules
+  in the subsystem `AGENTS.md`.
+
+## Version Control
+
+- Use GitButler (`but`) for normal agent version-control write operations,
+  including branching, committing, branch pushes, and history edits.
+- Assume multiple agents may be working in this repository. Do not move, amend,
+  squash, discard, commit, push, or otherwise modify another agent's work unless
+  the user asks.
+- Use a dedicated GitButler branch for each agent session, unless the user asks
+  for a different branch structure. Commit only changes that belong to that
+  session.
+- Agents may create local checkpoint commits autonomously after a coherent unit
+  of work is complete. Do not create micro-commits for every small edit; prefer
+  commits that match the current objective and would make sense when read later.
+- Pre-commit hooks are intentionally expensive and should run normally. Avoid
+  unnecessary checkpoint churn, and report any pre-commit failure with the fix
+  or remaining blocker.
+- Treat checkpoint commits as local savepoints, not final history. Before
+  finishing to `main`, use GitButler to tidy, squash, reword, or amend
+  unpublished session commits into a clean final shape.
+- At safe boundaries, such as before starting substantial work, before a
+  checkpoint commit, or before finishing to `main`, run `but pull --check`. If
+  it is clean and affects only this session's branch, `but pull` is allowed. If
+  it conflicts or touches another active branch, stop and ask.
+- If follow-up fixes clearly belong to an unpublished local commit, amend or
+  absorb them into that commit instead of creating tiny fixup commits.
+- Before large history edits or branch restructuring, create a GitButler
+  recovery point with `but oplog snapshot -m "before history cleanup"`.
+- If another active branch or session touches the same files, generated output,
+  or runtime state, call out the overlap before committing or finishing.
+- Do not push or open pull requests unless the user asks. Pull requests are not
+  the default workflow.
+- When the user asks to finish or integrate a session, the default outcome is
+  that the session's work lands on both local `main` and `origin/main` without a
+  pull request, unless the user asks for a different integration path.
+- This repo normally targets `origin/main` in GitButler. Do not use `but merge`
+  as the default finish command here: it is for `gb-local` targets and creates a
+  merge commit, which is not the desired no-PR squash-to-main workflow.
+- For a finish-to-main request, first use `but` to make the session branch a
+  single commit when needed, then verify the commit is based on current
+  `origin/main` and contains only this session's work. The final direct update
+  of local `main` and `origin/main` is the only allowed raw `git` write
+  exception for branch/commit publication, and it still requires explicit user
+  authorization.
+- Fast path for direct finish-to-main: if the session branch is already a
+  single commit based on current `origin/main`, do not create a detached
+  worktree or cherry-pick. After tests and `but pull --check`, publish with
+  `git push origin <session-commit>:main`. Treat a non-fast-forward rejection as
+  the race check; run `but pull`, retest if the base changed, and retry only
+  when clean. `but push <branch>` only publishes the GitButler branch; it does
+  not land work on `main`.
+
+- After a session lands on `main`, run `but pull` so GitButler can mark the
+  branch integrated, then preview cleanup with `but clean --dry-run` before
+  running `but clean`. Delete non-empty branches or raw local `codex/*` refs
+  only when they belong to this session and are confirmed merged; never clean up
+  another agent's branch unless the user asks.
+- After the direct push, verify `main`, `origin/main`, and `git ls-remote origin
+  refs/heads/main` all point at the landed commit. If local `main` is stale
+  after `but pull`, update only local `main` to `origin/main` as part of the same
+  explicit finish-to-main publication exception.
+- If a direct squash-to-main publication is used while the GitButler session
+  branch is still applied, `but pull` may try to rebase the duplicate checkpoint
+  commits onto the squash commit and report conflicts even though raw `git
+  status` is clean. In that case, verify `main` and `origin/main` contain the
+  squash commit, then delete only this session's GitButler branch instead of
+  resolving duplicate conflicts. If the current `but` build prompts to delete
+  "unpushed" duplicate commits and does not accept `--force`, pipe a single
+  `y` into `but branch delete <branch>`.
+- Final status must distinguish local checkpoint commits from branch pushes and
+  from work that has landed on `origin/main`. If the user asked to push
+  everything, finish only after verifying `origin/main` contains the session
+  commit.
+- Keep commit messages and any explicitly requested pull request descriptions
+  succinct: explain what changed, why it changed, and any important decision.
+
+## Build, Test, and Development Commands
+- Use `mise exec -- go ...` for Go commands in this repo so agents use the
+  repo-managed Go toolchain instead of a stale system `go` binary.
+- `mise exec -- go build ./cmd/yeet` — build the client CLI.
+- `mise exec -- go build ./cmd/catch` — build the server binary.
+- `mise exec -- go test ./...` — run the full test suite.
+- `mise exec -- go test ./pkg/svc` — run service-layer tests only.
+- `mise exec -- gofmt -w path/to/file.go` — format Go source files.
+- `make helloworld` / `make hellotimer` — build example binaries.
+- `make all` — installs `yeet` and runs `yeet init` (use with care).
+- Note: don’t set or manage `GOCACHE` here; just run tests normally and ignore cache artifacts.
+
+## Coding Style & Naming Conventions
+- Go code is formatted with `gofmt` and follows standard Go conventions.
+- Package names are lowercase; exported identifiers use `PascalCase`.
+- CLI flags use kebab-case in tags (e.g., `flag:"ts-auth-key"`).
+- In user-facing text, write `iso` lowercase because it names the isolated
+  network mode. Preserve established Go and schema identifiers such as
+  `ServiceISO` where compatibility or Go naming requires them.
+- Keep functions small and explicit; avoid hidden side effects in CLI parsing.
+- Avoid magic strings; use constants or shared registries for command names/keywords.
+
+## Authorization & Permissions
+- Yeet access control is operation-scoped. Future features must explicitly
+  classify their required permission before implementation: `read` for
+  observation, `manage` for high-trust mutation, or `ssh` for catch-mediated
+  host/service shell access.
+- Any new CLI command, web action, RPC method, registry path, TTY command,
+  background operation, or service-management behavior must document and test
+  its permission mapping.
+- If a new or changed feature exposes a user-facing operation boundary, ask the
+  user to confirm the intended permission unless it is already specified in the
+  request or an approved design.
+- VM guest SSH is a separate path from catch-mediated shell access. It should
+  require the permission needed to read VM connection metadata, while SSH keys
+  authorize guest login.
+
+## Testing Guidelines
+- Use Go’s `testing` package; name tests `TestXxx`.
+- Prefer table-driven tests for flag parsing and CLI routing.
+- Add tests for command bridging, parsing edge cases, and service behavior.
+- Keep iteration fast: while implementing or correcting review findings, run
+  only the smallest relevant focused, package, race, fuzz, or stress tests.
+- Run the complete required test suite once at the end of a coherent task,
+  immediately before its commit. Do not rerun the whole suite between small
+  fix iterations unless the change invalidates broad results.
+- Run `mise exec -- go test ./...` again at the final integration or release
+  boundary only when commits have changed since the task-level suite.
+
+## Quality Standard
+- Treat `main` as release-grade at all times: no known broken tests, red checks, reachable vulnerabilities, private-info leaks, or unreviewed quality regressions.
+- Pre-commit is the deterministic local gate. Run `pre-commit run --all-files`
+  once at the end of a coherent task before committing changes to code,
+  tooling, docs examples, or release surfaces; use targeted hooks while
+  iterating.
+- `mise run quality` must stay clean: private-info scan, coverage, CRAP, golangci, depaware, and hotspot reporting are the normal ratchet.
+- `mise run quality:goal` is the heavy destination gate. Run it once on a
+  stable release candidate, or after a coherent task that directly changes the
+  quality tooling or invalidates its broad guarantees. Do not run it between
+  implementation or review-fix iterations.
+- Current destination goals: at least 80% total coverage, zero CRAP hotspots, zero golangci findings, race detector clean, at least four active fuzz targets, and at least 80% mutation score on the bounded mutation target set.
+- Do not lower goals, refresh baselines, or mark findings acceptable just to get green. Burn down the issue, add focused tests, or document a technical reason in the relevant review/commit context.
+- Fuzz every parser, normalizer, RPC codec, config reader, path handler, and network-input surface when touched. Commit minimized fuzz corpus files for bugs found by fuzzing.
+- Race detector findings are bugs until proven otherwise. Fix test harness races too; they hide real concurrency failures.
+- Use hotspot ranking to choose quality work: high churn plus low coverage or complexity risk should move to the front of the burn-down queue.
+- Keep public repo content free of private infrastructure details, local machine paths, usernames, hostnames, and private service names unless the user explicitly approves publishing them.
+
+## Commit Guidelines
+- Commit messages typically follow `area: summary` (e.g., `cmd/yeet: add yargs CLI`).
+- Commit only the changes that belong to the current session branch.
+- Summaries for integration, release, or an explicitly requested pull request
+  should include the tests run and any user-facing behavior or CLI impacts.
+
+## Release & Tagging Process
+- Find the latest `vX.Y.Z` tag and bump the patch version.
+- Update `website/docs/changelog.mdx` with a new date section and 1-3
+  user-facing bullets for the release. The latest release entry must stand
+  alone for someone installing or upgrading.
+- For a feature release, lead with the capability and its user benefit. Explain
+  what Yeet now does by default, what happens to existing services, and any
+  command or choice needed to adopt or configure the feature. Do not lead with
+  the final compatibility fix, host-policy detail, or other implementation
+  work that made the feature possible.
+- Scope patch release notes to the commits between the previous published tag
+  and the tag being prepared. A minor or major release that launches a feature
+  should explain the complete user-facing feature even when preparatory work
+  appeared in earlier patch tags; do not pull in unrelated prior changes.
+- Before writing release notes, inspect the actual commit range (for example,
+  `git log <previous-tag>..HEAD`) and translate only user-visible behavior,
+  compatibility, migration, reliability, or operational changes from that range.
+- If a corrective patch supersedes a bad tag or artifact, carry forward the real
+  user-facing changes into the new latest entry and mark the superseded version
+  plainly. Do not make submodule pointers, git hashes, CI retries, tag repair,
+  or release plumbing the release note.
+- Update the bundled manual and changelog in this commit. Follow the release procedure in `../docs/release.md`.
+
+- Create an annotated tag with message equal to the version only (example:
+  `git tag -a v0.1.2 -m "v0.1.2"`). Raw `git` is allowed as a release/tagging
+  exception for tag creation if GitButler does not support tags.
+- After release commits have landed through the finish-to-main flow, push the
+  new tag. Raw `git` is allowed as a release/tagging exception for tag pushes
+  if needed (example: `git push origin v0.1.2`).
+- For release/tagging work, require explicit user authorization before release
+  commits, tags, or pushes.
+
+## Website Docs (User Manual)
+
+Edit `website/docs/` in this repository alongside user-facing changes.
+
+## Website Changelog Styleguide
+- Date-first sections, then version headings, then 1-3 short bullets per release.
+- Write for public yeet users and operators, not maintainers. Focus on what
+  changed for someone installing, upgrading, deploying, managing, or debugging
+  services.
+- The latest version section must make sense if it is the only section a user
+  sees. It should answer "what changed for me?" without requiring them to read
+  the previous version.
+- Treat release notes as the announcement and explanation of a shipped feature,
+  not a list of implementation hurdles. Name the feature first, then describe
+  its defaults, controls, compatibility, migration, or required user action.
+- Use plain, user-facing language focused on behavior changes, new capabilities,
+  reliability fixes, compatibility notes, and required user action. Avoid
+  internal refactors, tests, implementation details, commit chronology, and
+  developer-only wording.
+- Do not publish release-mechanics bullets about source revisions, submodule
+  pointers, git hashes, CI retries, tag repair, or website publication unless a
+  user has to take action because of them.
+- Keep tense consistent (past or present), keep lines concise, and avoid emojis.
+- Include only releases/tags; don’t list every commit.
+
+## Configuration & Environment
+- `CATCH_HOST`: overrides the default remote host for the client.
+- Keep local config in `~/.yeet/prefs.json` (managed via `yeet prefs`).
