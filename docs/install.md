@@ -57,7 +57,7 @@ Select **Install a fresh host**, then identify the OS disk by size, model and se
 
 Under **Manage ZFS pools or open shell**, import an offline pool by name and ID. To create a pool, open the ZFS shell, check disk serials with `lsblk`, then use `zpool` and `zfs` to build the desired topology. If your shell commands mounted filesystems, export the new pool before leaving the shell. Type `exit` to return, then import it through the wizard so the live system leaves its filesystems unmounted. You can keep unrelated datasets in the same pool. The host mounts the selected storage and its service children.
 
-Review the exact OS disk and the action for each storage location. Type the OS disk path to confirm. Setup prepares the selected NixOS generation before partitioning. When installation completes, reboot from the final screen. Select the installed disk at boot or detach the installer once the machine restarts. On a fresh install with prepared media, your Yeet host keeps the Tailscale identity you used to reach the installer. [Storage choices](screenshots/installer-payload-storage.png)
+Review the exact OS disk and the action for each storage location. Type the OS disk path to confirm. Setup prepares the selected NixOS generation before partitioning. When installation completes, note the Yeet host address and continue to **First boot**. Press **Enter** to power off. Wait until the machine is off or the VM shows **Stopped**, then pull the installer USB or eject the ISO from the virtual CD/DVD drive. Start the machine to boot from disk. On a fresh install with prepared media, your Yeet host keeps the Tailscale identity you used to reach the installer. [Storage choices](screenshots/installer-payload-storage.png)
 
 ## Find the installed host on the LAN
 
@@ -69,7 +69,7 @@ The installer records physical Ethernet-type interfaces in `/etc/nixos/host.json
 
 Choose **Recover an existing host** at the welcome screen. Shut down the original host before bringing its identity online elsewhere. For remote recovery with a private ISO, use a distinct temporary hostname and a new enrollment key. [Recovery screen](screenshots/installer-recovery.png)
 
-- **Repair my Yeet OS boot disk** if its root filesystem and installed system generation are intact. Boot the installer in the same firmware mode, select the original disk and confirm the hostname. This reinstalls the bootloader. Eject the installer and start the original disk.
+- **Repair my Yeet OS boot disk** if its root filesystem and installed system generation are intact. Boot the installer in the same firmware mode, select the original disk and confirm the hostname. This reinstalls the bootloader. Follow the final screen to power off, remove the installer, and start the machine from its original disk.
 - **Restore Yeet from my data disks** if you replaced the OS disk and still have your original ZFS data disks. Import the original pools, then select the dataset where Yeet stored its host data. The wizard uses saved settings when it finds them. Otherwise, it reads the app list from your disks and asks what should start at boot.
 
 After recovery, you can use the same Yeet address from your workstation. If you used a private ISO, remove its temporary installer node from your tailnet when finished. To prepare for a future disk swap, keep both Yeet host data and app files on storage that will survive it. Apps that use external drives or remote volumes still need access to those files.

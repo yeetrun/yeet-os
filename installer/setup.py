@@ -408,7 +408,7 @@ class Console:
             "WORKSTATION SETUP",
             "Deploy your first payload",
             "On your Mac or Linux workstation, sign into this tailnet and run these commands.",
-            "Enter  Reboot into Yeet OS" if live else "Enter  Return to shell",
+            "Enter  Finish installation" if live else "Enter  Return to shell",
         )
         for i, cmd in enumerate(
             (
@@ -420,9 +420,23 @@ class Console:
         ):
             self.put(y + 2 * i, 4, cmd, curses.color_pair(1))
         self.s.refresh()
-        key = self.s.getch()
-        if live and key in (10, 13, curses.KEY_ENTER):
-            run("systemctl", "reboot")
+        self.s.getch()
+        if live:
+            self.finish_install("Yeet OS is installed")
+
+    def finish_install(self, title):
+        while True:
+            self.page(
+                "FIRST BOOT", title,
+                "Press Enter to power off. If you’re connected over SSH, your session will close.\n"
+                "Wait until the machine is fully off or the VM shows Stopped. "
+                "Then pull the installer USB or eject the ISO from the VM’s virtual CD/DVD drive.\n"
+                "Turn the machine back on to boot Yeet OS from disk.",
+                "Enter  Power off",
+            )
+            if self.s.getch() in (10, 13, curses.KEY_ENTER):
+                run("systemctl", "poweroff")
+                return
 
     def show_login(self):
         password_file = Path("/run/yeet-installer-login/password")

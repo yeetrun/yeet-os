@@ -259,13 +259,7 @@ def recover(ui):
                 raise SetupError("Hostname confirmation did not match.")
             with locked():
                 repair_os(h)
-            ui.page(
-                "RECOVERY",
-                "Bootloader restored",
-                "Detach the installation media and boot the original disk.",
-                "Enter  Return",
-            )
-            ui.s.getch()
+            ui.finish_install("Bootloader restored")
             return None
         rows = datasets()
         if not rows:

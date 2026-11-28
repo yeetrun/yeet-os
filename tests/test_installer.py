@@ -12,6 +12,28 @@ import provision
 
 
 class InstallerTests(unittest.TestCase):
+    def test_live_finish_waits_for_enter_before_poweroff(self):
+        import setup
+
+        ui = object.__new__(setup.Console)
+        ui.page = Mock()
+        ui.s = Mock()
+        ui.s.getch.side_effect = [setup.curses.KEY_RESIZE, ord("x"), 13]
+        with patch.object(setup, "run") as run:
+            ui.finish_install("Yeet OS is installed")
+        self.assertEqual(ui.s.getch.call_count, 3)
+        run.assert_called_once_with("systemctl", "poweroff")
+
+    def test_installed_client_setup_returns_without_powering_off(self):
+        import setup
+
+        ui = Mock()
+        ui.page.return_value = 8
+        with patch.object(setup.curses, "color_pair", return_value=0):
+            setup.Console.clients(ui, "yeet-home", False)
+        ui.finish_install.assert_not_called()
+        self.assertEqual(ui.page.call_args.args[-1], "Enter  Return to shell")
+
     def test_github_keys_are_reviewed_and_installed_once(self):
         import setup
 
