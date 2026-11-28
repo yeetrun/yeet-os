@@ -29,6 +29,7 @@ def pool_tools(ui):
         "Return to storage choices",
         "Import an existing pool",
         "Open a ZFS shell",
+        "Encrypted ZFS recovery",
     ]
     choice = ui.choose(
         "STORAGE TOOLS",
@@ -78,6 +79,34 @@ def pool_tools(ui):
             ui,
             "Use lsblk, zpool and zfs to prepare storage. Type exit to rescan and return.",
         )
+
+    elif choice == 3:
+        encrypted_recovery(ui)
+
+
+def encrypted_recovery(ui):
+    from zfs_keys import LIVE, filename, inventory
+
+    def verified(ds, rows=None):
+        if not (LIVE / filename(ds)).is_file():
+            return False
+        if rows is None:
+            rows = inventory()
+        return ds in rows and rows[ds][:2] == (ds, "available")
+
+    while True:
+        rows = inventory()
+        roots = sorted(ds for ds, (root, _, _) in rows.items() if ds == root)
+        i = ui.choose(
+            "ZFS KEYS", "Encrypted ZFS recovery",
+            "Select an encrypted dataset to send its key from your workstation."
+            if roots else "No encrypted datasets found. Import your original pools first.",
+            ["Return to recovery"] + [f"{ds}   " + ("key verified" if verified(ds, rows) else "needs key") for ds in roots],
+        )
+        if not i:
+            return
+        ds = roots[i - 1]
+        ui.wait_for_zfs_key(ds, lambda: verified(ds))
 
 
 def open_shell(ui, message):
@@ -199,10 +228,14 @@ def recover(ui):
                 "Repair my Yeet OS boot disk",
                 "Restore Yeet from my data disks",
                 "Manage ZFS pools or open shell",
+                "Encrypted ZFS recovery",
             ],
         )
         if choice == 2:
             pool_tools(ui)
+            continue
+        if choice == 3:
+            encrypted_recovery(ui)
             continue
         if choice == 0:
             hosts = os_disks()

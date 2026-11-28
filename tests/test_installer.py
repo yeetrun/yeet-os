@@ -3,13 +3,50 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "installer"))
 import provision
 
 
 class InstallerTests(unittest.TestCase):
+    def test_key_screen_updates_without_input_after_verification(self):
+        import setup
+
+        ui = object.__new__(setup.Console)
+        ui.s = Mock()
+        ui.s.getmaxyx.return_value = (24, 80)
+        ui.s.getch.return_value = -1  # Curses timeout, no operator input.
+        ui.page = Mock()
+        ui.choose = Mock()
+        with patch.object(setup, "installer_ssh_endpoints", return_value=[("192.0.2.10", 2222)]):
+            ui.wait_for_zfs_key("tank/apps", Mock(side_effect=[False, False, True]))
+        self.assertIn("ssh -T -p 2222 root@192.0.2.10 yeet-zfs-key tank/apps < KEYFILE",
+                      ui.page.call_args.args[2])
+        self.assertEqual(ui.s.getch.call_count, 2)
+        self.assertEqual(ui.choose.call_args.args[1:3], ("Key verified", "tank/apps is unlocked."))
+        ui.s.timeout.assert_called_with(-1)
+
+    def test_key_upload_uses_the_address_reached_over_ssh(self):
+        import setup
+
+        with patch.object(setup.Path, "exists", return_value=False), patch.dict(
+            setup.os.environ, SSH_CONNECTION="2001:db8::2 52000 2001:db8::1 2222"
+        ):
+            self.assertEqual(setup.installer_ssh_endpoints(), [("2001:db8::1", 2222)])
+
+    def test_prepared_key_upload_uses_public_tailnet_listener(self):
+        import setup
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            setup, "Path", side_effect=lambda name: Path(tmp, Path(name).name)
+        ), patch.dict(setup.os.environ, SSH_CONNECTION="127.0.0.1 41000 127.0.0.1 2222"):
+            Path(tmp, "yeet-machine.json").touch()
+            with self.assertRaisesRegex(provision.SetupError, "not ready"):
+                setup.installer_ssh_endpoints()
+            Path(tmp, "ready").write_text("installer.example.ts.net\n")
+            self.assertEqual(setup.installer_ssh_endpoints(), [("installer.example.ts.net", 22)])
+
     def test_live_console_prefers_ipv4_and_handles_filtered_addresses(self):
         from setup import installer_addresses
 

@@ -56,7 +56,7 @@ def data_path(value):
     return value
 
 
-def datasets():
+def datasets(*, include_locked=False):
     raw = run(
         "zfs",
         "list",
@@ -70,9 +70,9 @@ def datasets():
     result = {}
     for line in raw.splitlines():
         name, point, available, keys, mountable = line.split("\t")
-        if keys == "unavailable" or mountable == "off" or not point.startswith("/"):
+        if (keys == "unavailable" and not include_locked) or mountable == "off" or not point.startswith("/"):
             continue
-        result[name] = (point, int(available))
+        result[name] = (point, 0 if available == "-" else int(available))
     return result
 
 

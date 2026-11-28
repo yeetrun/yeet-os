@@ -225,6 +225,9 @@ def build_generation(command, manifest, work, boot_only=False):
         run, source, nixpkgs, site, SYSTEM, work / "system", local=SITE / "local"
     )
     target = Path(system)
+    layout = (json.loads((site / "layout.json").read_text()) or {}) if site else {}
+    if layout.get("encryptionRoots") and not (target / "etc/systemd/system/yeet-zfs-unlock.service").is_file():
+        raise ValueError("This release cannot unlock your data disks at boot. The current generation is still selected.")
     blockers = [] if boot_only else changed_inhibitors(target)
     if blockers:
         print("NixOS requires a reboot for changes to " + ", ".join(blockers) + ".", flush=True)

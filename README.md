@@ -76,8 +76,8 @@ For machine-wide changes, edit `/etc/nixos/local/default.nix` and run `yeet-os r
 
 ## Replace a boot disk
 
-If you keep Yeet’s host data and app files on separate ZFS data disks, you can replace the OS disk and bring the same Yeet host back. Shut down the old host, leave the data disks attached, and boot the installer. Choose **Recover an existing host**, import your pools, then select **Restore Yeet from my data disks**. The wizard shows which apps it found before you confirm the replacement disk.
+If you keep Yeet’s host data and app files on separate ZFS data disks, you can replace the OS disk and bring the same Yeet host back. Shut down the old host, leave the data disks attached, and boot the installer. Choose **Recover an existing host**, import your pools, then select **Restore Yeet from my data disks**. The wizard shows which apps it found before you confirm the replacement disk. For encrypted datasets, have your key backup ready. [Unlock your data disks over SSH](docs/install.md#recover-encrypted-zfs-data-disks)
 
-[Watch the disk replacement (1 min 49 sec)](https://cdn.jsdelivr.net/gh/yeetrun/yeet-os@main/docs/legacy-migration.mp4) · [Supported storage layouts and recovery steps](docs/install.md#move-an-existing-yeet-host-to-a-new-ssd)
+[Watch encrypted ZFS recovery over SSH](https://github.com/yeetrun/yeet-os/releases/download/v0.3.7/encrypted-zfs-recovery.mp4) · [Watch the disk replacement (1 min 49 sec)](https://cdn.jsdelivr.net/gh/yeetrun/yeet-os@main/docs/legacy-migration.mp4) · [Supported storage layouts and recovery steps](docs/install.md#move-an-existing-yeet-host-to-a-new-ssd)
 
 For a Proxmox disk image, instructions for updating the host, or the NixOS module for your own flake, see the [host guide](docs/host.md).

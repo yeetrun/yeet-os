@@ -422,6 +422,15 @@ def install(config, key, event):
             raise SetupError("The recovery record changed. Rescan storage.")
     elif layout:
         validate_layout(layout)
+    from zfs_keys import verified_keys, install_keys
+
+    keys = verified_keys(layout)
+    if layout:
+        layout = dict(layout)
+        layout.pop("encryptionRoots", None)
+        if keys:
+            layout["encryptionRoots"] = sorted(keys)
+        config = dict(config, layout=layout)
     with tempfile.TemporaryDirectory(prefix="yeet-site-") as stage:
         event("progress", "Preparing the NixOS configuration for this machine")
         profile = prepare_system(Path(stage), config, firmware)
@@ -446,6 +455,8 @@ def install(config, key, event):
                 if firmware == "uefi":
                     (root / "boot").mkdir()
                     run("mount", "-o", "umask=0077", parts[1], str(root / "boot"))
+                (root / "etc").mkdir(exist_ok=True)
+                install_keys(root, keys)
                 if layout:
                     create_and_mount(
                         layout, root, bool(recovery), bind_units=not legacy

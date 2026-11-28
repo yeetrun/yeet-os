@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -70,6 +71,23 @@ def installer_addresses(interfaces):
     return addresses
 
 
+def live_addresses():
+    return installer_addresses(json.loads(run("ip", "-j", "address", "show", "up", "scope", "global")))
+
+
+def installer_ssh_endpoints():
+    if Path("/etc/yeet-machine.json").exists():
+        # Prepared media forwards tailnet port 22 to a loopback-only sshd.
+        ready = Path("/run/yeet-live/ready")
+        if ready.is_file() and (host := ready.read_text().strip()):
+            return [(host, 22)]
+        raise SetupError("The installer's Tailscale connection is not ready. Check the network and try again.")
+    connection = os.environ.get("SSH_CONNECTION", "").split()
+    if len(connection) == 4:
+        return [(connection[2], int(connection[3]))]
+    return [(host, 2222) for host in live_addresses()]
+
+
 def static_addresses(ui):
     return {
         "address": ui.field(
@@ -108,6 +126,10 @@ class Console:
         if 0 <= y < h and x < w - 1:
             self.s.addnstr(y, x, value, w - x - 1, style)
 
+    def wrap_copy(self, copy):
+        width = max(24, min(76, self.s.getmaxyx()[1] - 9))
+        return [part for line in copy.splitlines() for part in textwrap.wrap(line, width)]
+
     def page(self, step, title, copy="", footer=""):
         self.s.erase()
         h, w = self.s.getmaxyx()
@@ -115,11 +137,7 @@ class Console:
         self.put(1, max(14, w - len(step) - 4), step, curses.color_pair(1))
         self.put(2, 3, "─" * max(10, w - 7), curses.color_pair(1))
         self.put(4, 4, title, curses.color_pair(3) | curses.A_BOLD)
-        lines = [
-            part
-            for line in copy.splitlines()
-            for part in textwrap.wrap(line, max(24, min(76, w - 9)))
-        ]
+        lines = self.wrap_copy(copy)
         for n, line in enumerate(lines):
             self.put(6 + n, 4, line)
         self.put(h - 2, 4, footer, curses.color_pair(1))
@@ -338,10 +356,7 @@ class Console:
         self.s.timeout(1000)
         try:
             while True:
-                entries = json.loads(
-                    run("ip", "-j", "address", "show", "up", "scope", "global")
-                )
-                addresses = installer_addresses(entries)
+                addresses = live_addresses()
                 commands = [f"ssh -p 2222 -t root@{addr}" for addr in addresses]
                 if password_file.is_file() and host_key.is_file() and commands:
                     fingerprint = run("ssh-keygen", "-lf", str(host_key)).split()[1]
@@ -370,6 +385,51 @@ class Console:
                     return
         finally:
             self.s.timeout(-1)
+
+    def wait_for_zfs_key(self, dataset, verified):
+        endpoints = installer_ssh_endpoints()
+        if not endpoints:
+            raise SetupError("Connect the installer to your network, then return here to send the key.")
+        index = 0
+        if len(endpoints) > 1:
+            index = self.choose("ZFS KEYS", "Which installer address can your workstation reach?",
+                                "", [host for host, _ in endpoints])
+        host, port = endpoints[index]
+        ssh = ["ssh", "-T"] + (["-p", str(port)] if port != 22 else [])
+        command = shlex.join([*ssh, "root@" + host, "yeet-zfs-key", dataset]) + " < KEYFILE"
+        self.s.timeout(500)
+        try:
+            redraw = True
+            while True:
+                if verified():
+                    self.s.timeout(-1)
+                    self.choose("ZFS KEYS", "Key verified", f"{dataset} is unlocked.",
+                                ["Back to encrypted datasets"])
+                    return
+                if redraw:
+                    width = max(24, min(76, self.s.getmaxyx()[1] - 9))
+                    lines = textwrap.wrap(command, width - 2, break_on_hyphens=False, break_long_words=False)
+                    self.page("ZFS KEYS", "Waiting for the key",
+                              "In a second terminal on your workstation, run this command. Replace KEYFILE "
+                              "with the path to your backup.\n" + " \\\n".join(lines)
+                              + "\nThis screen updates when the key is verified.",
+                              "Enter  Back to datasets      Esc  Main menu")
+                key = self.s.getch()
+                if key in (10, 13, curses.KEY_ENTER):
+                    return
+                if key == 27:
+                    raise Cancelled()
+                redraw = key == curses.KEY_RESIZE
+        finally:
+            self.s.timeout(-1)
+
+    def confirm_disk(self, summary, disk):
+        lines = self.wrap_copy("\n".join([*summary, f"Type {disk} to erase the OS disk."]))
+        while len(lines) > (capacity := max(1, self.s.getmaxyx()[0] - 12)):
+            self.choose("REVIEW", "Review installation", "\n".join(lines[:capacity]),
+                        ["Continue review"])
+            lines = lines[capacity:]
+        return self.field("REVIEW", "Review installation", "\n".join(lines))
 
     def wizard(self):
         live = "YEET_UEFI_SYSTEM" in os.environ
@@ -496,6 +556,14 @@ class Console:
                     f"Erase {disk}   {dev['model'] or 'Disk'}   {dev['size'] / 1024**3:.1f} GiB",
                     f"Host   {name}",
                 ]
+                if layout:
+                    from zfs_keys import verified_keys
+
+                    roots = sorted(verified_keys(layout))
+                    if roots:
+                        summary.append("Verified ZFS keys: " + ", ".join(roots))
+                        summary.append("Yeet OS will save these keys on the new OS disk and unlock your data "
+                                       "on every reboot. Keep your key backup.")
                 if network:
                     summary.append(
                         f"Network   {network['address']} on {network['interface']}"
@@ -531,11 +599,7 @@ class Console:
                     summary.append(
                         "The original host must be offline before this identity starts."
                     )
-                confirm = self.field(
-                    "REVIEW",
-                    "Review installation",
-                    "\n".join(summary + [f"Type {disk} to erase the OS disk."]),
-                )
+                confirm = self.confirm_disk(summary, disk)
                 plan = dict(
                     version=1,
                     disk=disk,
@@ -623,6 +687,16 @@ def main():
     options = args.parse_args()
     if os.geteuid() != 0:
         raise SetupError("Run yeet-setup as root.")
+    original = os.environ.get("SSH_ORIGINAL_COMMAND", "")
+    if original.startswith("yeet-zfs-key"):
+        args = original.split()
+        if len(args) != 2 or args[0] != "yeet-zfs-key" or os.isatty(0) or "YEET_UEFI_SYSTEM" not in os.environ:
+            raise SetupError("Use ssh -T root@INSTALLER yeet-zfs-key POOL/ROOT < KEYFILE on the installer SSH port.")
+        from zfs_keys import upload
+
+        upload(args[1], sys.stdin.buffer)
+        print(f"Verified the key and unlocked {args[1]}. Return to setup to continue.")
+        return
     if options.select_uplink:
         machine_profile()
         return

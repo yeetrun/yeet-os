@@ -25,7 +25,9 @@ def regular(root, path):
 
 
 def inventory(dataset, *, read_units=False):
-    filesystems = datasets()
+    # A locked child still owns its mountpoint. Never recover the empty directory
+    # underneath it from the parent when resolving a VM artifact or container bind.
+    filesystems = datasets(include_locked=True)
     volumes = set(run("zfs", "list", "-H", "-t", "volume", "-o", "name").splitlines())
     with ExitStack() as stack:
         views = {}
@@ -211,7 +213,9 @@ def adoption(dataset, hostname, host_id, enabled, engine=None, bridges=None):
         raise SetupError(
             "Restore the original Tailscale identity file (tsnet/tailscaled.state) from backup to reconnect at the same address."
         )
-    filesystems = datasets()
+    # A locked child still owns its mountpoint. Never recover the empty directory
+    # underneath it from the parent when resolving a VM artifact or container bind.
+    filesystems = datasets(include_locked=True)
     services = report["services"]
     service_ds = [ds for ds, (mp, _) in filesystems.items() if mp == services]
     if len(service_ds) > 1 or (

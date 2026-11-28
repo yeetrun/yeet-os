@@ -86,6 +86,44 @@ Boot the public ISO and use the LAN login on its console. If you use a private i
 
 Recovery without saved settings supports Yeet host data at the top level of a ZFS filesystem, service directories under it or on separate ZFS filesystems, component-based Firecracker VMs, and Compose projects on dedicated Docker and containerd datasets using Docker’s containerd image store. Applications whose data lived only on the removed SSD need that data restored first. A path with a missing backing filesystem, an unsupported runtime, or a missing hardware device stops the install before disk erasure. Host SSH keys, unrelated system services and hypervisor guests are outside the Yeet workload inventory.
 
+### Recover encrypted ZFS data disks
+
+Before removing the old boot disk, check which files unlock your pools:
+
+```sh
+ssh root@OLDHOST 'zfs get -H -t filesystem,volume -o name,value keylocation'
+```
+
+A `file:///…` entry on an encryption root identifies the original key file. Copy each distinct file to private storage you can access without those pools. From a workstation with an encrypted backup drive mounted, substitute its directory and the path reported by ZFS:
+
+```sh
+(
+  set -eu
+  umask 077
+  cd /path/to/encrypted-backup-drive
+  backup=$(mktemp -d yeet-keys.XXXXXXXX)
+  scp root@OLDHOST:/path/to/original.key "$backup/pool.key"
+  ssh -T root@OLDHOST 'cmp -s - /path/to/original.key' < "$backup/pool.key"
+  printf 'Verified backup: %s/%s/pool.key\n' "$PWD" "$backup"
+)
+```
+
+For a passphrase with `keylocation=prompt`, keep the original passphrase in your password manager. ZFS can verify a key while the dataset is in use:
+
+```sh
+ssh root@OLDHOST 'zfs load-key -n -L file:///path/to/original.key pool/root'
+```
+
+In the installer choose **Recover an existing host → Manage ZFS pools or open shell → Import an existing pool** for each data pool. Open **Encrypted ZFS recovery** and select the dataset you want to unlock. Leave that screen open. In a second terminal on your workstation, copy the command shown and replace `KEYFILE` with the path to your backup. The installer fills in its SSH address, port and the dataset name. For example:
+
+```sh
+ssh -T -p 2222 root@192.0.2.10 yeet-zfs-key tank/apps < "$HOME/Downloads/backup.key"
+```
+
+For the generic ISO, verify the SSH fingerprint against the live console and use the installer login password. The wizard changes to **Key verified** as soon as the dataset unlocks. If the upload reports an incorrect key, leave the wizard open and try the correct file. Repeat for each required encryption root, including roots holding Docker bind mounts or VM disks. Multiple roots can use the same backup file. Send raw keys as binary files, hex keys in their original text format, and passphrases as a single line through stdin. Return to **Restore Yeet from my data disks**. Before you confirm the install, the review lists the verified keys and explains how the host will unlock your data on reboot.
+
+Setup verifies the keys before erasing the replacement SSD. It stores the required keys in a root-only directory at `/etc/yeet-zfs-keys` on that SSD. The installed host reads them after pool import and before mounting the data filesystems. The keys stay outside the Nix store, ISO, initrd, and recovery record. The pools retain their original key properties. Keep your independent key backup for the next disk replacement. Someone with the replacement SSD and the data disks can unlock the data.
+
 ## Deploy a payload
 
 On a Mac or Linux computer signed into that tailnet, substitute the name shown on the completion screen.
