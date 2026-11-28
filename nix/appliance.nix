@@ -34,7 +34,7 @@ in {
   users.users.yeet = {
     isNormalUser = true;
     description = "Yeet administrator";
-    extraGroups = [ "wheel" ];
+    extraGroups = [ "wheel" "docker" ];
   };
   security.sudo.extraRules = [{
     users = [ "yeet" ];
