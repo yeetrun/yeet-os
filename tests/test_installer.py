@@ -493,28 +493,57 @@ class StorageAndProfileTests(unittest.TestCase):
 
         for answer, expected in [("pool", True), ("", False), ("other", False)]:
             ui = Mock()
-            ui.choose.side_effect = [1, 0, 1]
             ui.field.return_value = answer
-            with (
-                self.subTest(answer=answer),
-                patch.object(storage_ui.shutil, "which", return_value="zpool"),
-                patch.object(storage_ui, "importable", return_value=[("pool", "42")]),
-                patch.object(
-                    storage_ui,
-                    "run",
-                    side_effect=[provision.SetupError("previously in use"), ""],
-                ) as run,
-            ):
-                if answer == "other":
-                    with self.assertRaises(provision.SetupError):
-                        storage_ui.pool_tools(ui)
-                else:
-                    storage_ui.pool_tools(ui)
+            with self.subTest(answer=answer), patch.object(
+                storage_ui, "run", side_effect=[provision.SetupError("previously in use"), ""],
+            ) as run:
+                result = storage_ui.import_pool(ui, "pool", "42")
+                self.assertEqual(result is None, expected)
                 self.assertEqual(
-                    ("zpool", "import", "-N", "-f", "42")
-                    in [c.args for c in run.call_args_list],
+                    ("zpool", "import", "-N", "-f", "42") in [c.args for c in run.call_args_list],
                     expected,
                 )
+
+    def test_multiselect_import_rescans_partial_results_before_unlock(self):
+        import storage_ui
+
+        ui = Mock()
+        ui.review_text.side_effect = lambda step, title, lines: "\n".join(lines)
+        ui.choose_many.side_effect = [["flash   11", "rust   22"], ["rust   22"]]
+        ui.choose.side_effect = [1, 2, 1, 0]  # Confirm, rescan, confirm, unlock.
+        with (
+            patch.object(storage_ui, "importable", side_effect=[
+                [("flash", "11"), ("rust", "22"), ("spare", "33")], [("rust", "22"), ("spare", "33")],
+            ]),
+            patch.object(storage_ui, "run", side_effect=[
+                "", provision.SetupError("device busy"), "flash\t11",
+                "", "flash\t11\nrust\t22",
+            ]) as run,
+            patch.object(storage_ui, "encrypted_recovery") as unlock,
+        ):
+            storage_ui.import_pools(ui)
+        self.assertEqual(
+            [c.args for c in run.call_args_list if c.args[1] == "import"],
+            [("zpool", "import", "-N", guid) for guid in ("11", "22", "22")],
+        )
+        first = ui.choose.call_args_list[1].args[2]
+        self.assertIn("Imported   flash   11", first)
+        self.assertIn("Not imported   rust   22   device busy", first)
+        self.assertEqual(ui.choose.call_args.args[2], "Imported   flash   11\nImported   rust   22")
+        unlock.assert_called_once_with(ui)
+
+    def test_revisit_reports_imported_pools_without_reimporting(self):
+        import storage_ui
+
+        ui = Mock()
+        ui.choose.return_value = 1  # Back to storage choices.
+        with patch.object(storage_ui, "importable", return_value=[]), patch.object(
+            storage_ui, "run", return_value="flash\t11\nrust\t22"
+        ) as run:
+            storage_ui.import_pools(ui)
+        self.assertEqual(ui.review_text.call_args.args[2], ["Imported   flash   11", "Imported   rust   22"])
+        ui.choose_many.assert_not_called()
+        run.assert_called_once_with("zpool", "list", "-H", "-p", "-o", "name,guid")
 
     def test_detect_external_workload_roots_before_recovery(self):
         import storage

@@ -249,15 +249,13 @@ class Console:
             elif key == 27:
                 raise Cancelled()
 
-    def boot_choices(self, choices):
+    def choose_many(self, step, title, copy, choices):
         names = list(choices)
         enabled = set()
         index = 0
         while names:
             top = self.page(
-                "BOOT SETTINGS",
-                "What should start when the host boots?",
-                "Select the apps, scheduled jobs and VMs you want Yeet to start. Docker keeps each container’s restart policy.",
+                step, title, copy,
                 "↑ ↓  Select    Space  Toggle    A  Toggle all    Enter  Accept    Esc  Back",
             )
             count = max(1, self.s.getmaxyx()[0] - top - 3)
@@ -511,13 +509,17 @@ class Console:
         finally:
             self.s.timeout(-1)
 
-    def confirm_disk(self, summary, disk):
-        lines = self.wrap_copy("\n".join([*summary, f"Type {disk} to erase the OS disk."]))
+    def review_text(self, step, title, summary):
+        lines = self.wrap_copy("\n".join(summary))
         while len(lines) > (capacity := max(1, self.s.getmaxyx()[0] - 12)):
-            self.choose("REVIEW", "Review installation", "\n".join(lines[:capacity]),
+            self.choose(step, title, "\n".join(lines[:capacity]),
                         ["Continue review"])
             lines = lines[capacity:]
-        return self.field("REVIEW", "Review installation", "\n".join(lines))
+        return "\n".join(lines)
+
+    def confirm_disk(self, summary, disk):
+        copy = self.review_text("REVIEW", "Review installation", [*summary, f"Type {disk} to erase the OS disk."])
+        return self.field("REVIEW", "Review installation", copy)
 
     def wizard(self):
         live = "YEET_UEFI_SYSTEM" in os.environ

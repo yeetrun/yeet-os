@@ -503,7 +503,11 @@ def review(ui, dataset):
                 ui.choose(
                     "STORAGE AND NETWORK", "Saved setting", mappings[item - 1], ["Back"]
                 )
-            enabled = ui.boot_choices(choices)
+            enabled = ui.choose_many(
+                "BOOT SETTINGS", "What should start when the host boots?",
+                "Select the apps, scheduled jobs and VMs you want Yeet to start. Docker keeps each container’s restart policy.",
+                choices,
+            )
             if ui.choose(
                 "MIGRATION",
                 "Reconnect as your old Yeet host?",

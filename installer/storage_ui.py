@@ -27,53 +27,18 @@ def pool_tools(ui):
         )
     choices = [
         "Return to storage choices",
-        "Import an existing pool",
+        "Import existing pools",
         "Open a ZFS shell",
         "Encrypted ZFS recovery",
     ]
     choice = ui.choose(
         "STORAGE TOOLS",
         "Manage ZFS pools",
-        "Import a pool by its ID, or use the shell to create a pool with your preferred disk layout.",
+        "Choose existing pools to import, or open the shell to create a pool.",
         choices,
     )
     if choice == 1:
-        pools = importable()
-        if not pools:
-            raise SetupError("No exported pools were detected.")
-        index = ui.choose(
-            "EXISTING POOLS",
-            "Import a pool",
-            "Select an offline pool. Setup imports it without mounting its datasets.",
-            [f"{name}   {guid}" for name, guid in pools],
-        )
-        name, guid = pools[index]
-        if (
-            ui.choose(
-                "CONFIRM IMPORT",
-                f"Import {name}?",
-                f"Pool ID {guid}. Confirm that the pool is no longer in use on another host.",
-                ["Go back", "Import pool"],
-            )
-            == 1
-        ):
-            try:
-                run("zpool", "import", "-N", guid)
-            except SetupError as exc:
-                if "previously in use" not in str(exc):
-                    raise
-                confirm = ui.field(
-                    "OFFLINE POOL",
-                    f"Take ownership of {name}?",
-                    "ZFS reports that another system last used this pool. Power off that system and disconnect any other writer. Type the pool name to force an unmounted import, or leave it blank to cancel.",
-                )
-                if confirm == name:
-                    run("zpool", "import", "-N", "-f", guid)
-                elif confirm:
-                    raise SetupError(
-                        "Pool name did not match. The pool was left alone."
-                    )
-
+        import_pools(ui)
     elif choice == 2:
         open_shell(
             ui,
@@ -82,6 +47,75 @@ def pool_tools(ui):
 
     elif choice == 3:
         encrypted_recovery(ui)
+
+
+def import_pool(ui, name, guid):
+    try:
+        run("zpool", "import", "-N", guid)
+    except SetupError as exc:
+        if "previously in use" not in str(exc):
+            raise
+        confirm = ui.field(
+            "OFFLINE POOL", f"Take ownership of {name}?",
+            f"Pool ID {guid}. ZFS reports that another system last used this pool. "
+            "Power off that system and disconnect any other writer. Type the pool name "
+            "to take ownership, or leave it blank to skip this pool.",
+        )
+        if confirm != name:
+            return "Skipped because the name did not match." if confirm else "Skipped"
+        run("zpool", "import", "-N", "-f", guid)
+
+
+def import_pools(ui):
+    while True:
+        pools = {f"{name}   {guid}": (name, guid) for name, guid in importable()}
+        selected = []
+        if pools:
+            selected = ui.choose_many(
+                "EXISTING POOLS", "Select pools to import",
+                "Mark each pool you want to use, then press Enter to review. Its datasets will stay unmounted.",
+                pools,
+            )
+            if selected:
+                title = "Import the selected pools?"
+                summary = ui.review_text("CONFIRM IMPORT", title, [
+                    "Confirm that these pools are no longer in use on another host.", *selected,
+                ])
+                if ui.choose("CONFIRM IMPORT", title, summary, ["Go back", "Import selected pools"]) == 0:
+                    continue
+
+        issues = {}
+        for label in selected:
+            name, guid = pools[label]
+            ui.page("POOL IMPORT", "Importing pools", f"Importing {name}…")
+            try:
+                issues[guid] = import_pool(ui, name, guid)
+            except SetupError as exc:
+                issues[guid] = str(exc)
+
+        # Read back ZFS's active pool IDs, including imports from an earlier visit.
+        active = {}
+        for row in run("zpool", "list", "-H", "-p", "-o", "name,guid").splitlines():
+            name, guid = row.split("\t")
+            active[guid] = name
+        lines = [f"Imported   {name}   {guid}" for guid, name in active.items()]
+        for label in selected:
+            _, guid = pools[label]
+            if guid not in active:
+                reason = issues[guid] or "ZFS did not list this pool after import."
+                lines.append(f"Not imported   {label}   {reason}")
+        if not lines:
+            lines.append("No pools were selected." if pools else "No ZFS pools were detected.")
+        title = "Pool import status"
+        summary = ui.review_text("EXISTING POOLS", title, lines)
+        actions = ["Back to storage choices", "Rescan pools"]
+        if active:
+            actions.insert(0, "Unlock encrypted datasets")
+        action = actions[ui.choose("EXISTING POOLS", title, summary, actions)]
+        if action == "Unlock encrypted datasets":
+            encrypted_recovery(ui)
+        if action != "Rescan pools":
+            return
 
 
 def encrypted_recovery(ui):
